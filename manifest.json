@@ -1,0 +1,10 @@
+{
+    "domain": "frameit",
+    "name": "FrameIt Agent",
+    "version": "1.0",
+    "documentation": "https://github.com/muddyland/frameit-hass-integration",
+    "requirements": ["requests"],
+    "dependencies": [],
+    "codeowners": ["@muddyland"],
+    "config_flow": true
+  }
