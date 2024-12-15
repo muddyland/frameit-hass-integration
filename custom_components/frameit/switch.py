@@ -1,26 +1,27 @@
 from homeassistant.components.switch import SwitchEntity
-import requests
 import logging
+import requests
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entities):
-    devices = hass.data.get(DOMAIN, {}).values()
-    switches = []
+    data = config_entry.data
+    device_name = data["device_name"]
+    ip = data["ip"]
+    api_key = data["api_key"]
+    headers = {
+        'X-API-Key': api_key,
+        'Content-Type': 'application/json'
+    }
 
-    for device in devices:
-        ip = device['ip']
-        api_key = device['api_key']
-        headers = {
-            'X-API-Key': api_key,
-            'Content-Type': 'application/json'
-        }
+    entities = [
+        FrameItSwitch(f"{device_name} Display", f"http://{ip}/display", headers)
+        # Add more switches if needed
+    ]
 
-        switches.append(FrameItSwitch(f"{device['name']} Display", f"http://{ip}/display", headers))
-
-    async_add_entities(switches, True)
+    async_add_entities(entities, True)
 
 class FrameItSwitch(SwitchEntity):
     def __init__(self, name, resource, headers):
@@ -48,17 +49,17 @@ class FrameItSwitch(SwitchEntity):
     async def async_update(self):
         try:
             response = await self.hass.async_add_executor_job(
-                requests.get, self._resource, {'headers': self._headers, 'timeout': 10}
+                requests.get, self._resource, headers=self._headers
             )
             data = response.json()
             self._state = data.get("status") == "on"
         except Exception as e:
-            _LOGGER.error(f"Error fetching switch state for {self._name}: {e}")
+            _LOGGER.error(f"Error fetching state for {self.name}: {e}")
 
     async def _async_send_request(self, payload):
         try:
             await self.hass.async_add_executor_job(
-                requests.post, self._resource, {'data': payload, 'headers': self._headers, 'timeout': 10}
+                requests.post, self._resource, headers=self._headers, data=payload
             )
         except Exception as e:
-            _LOGGER.error(f"Error sending request to {self._name}: {e}")
+            _LOGGER.error(f"Error sending request to {self.name}: {e}")

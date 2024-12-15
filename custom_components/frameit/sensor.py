@@ -9,26 +9,26 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities):
-    devices = hass.data.get(DOMAIN, {}).values()
-    sensors = []
+    """Setup sensors for each FrameIt device."""
+    data = config_entry.data
+    device_name = data["device_name"]
+    ip = data["ip"]
+    api_key = data["api_key"]
+    headers = {
+        'X-API-Key': api_key,
+        'Content-Type': 'application/json'
+    }
 
-    for device in devices:
-        ip = device['ip']
-        api_key = device['api_key']
-        headers = {
-            'X-API-Key': api_key,
-            'Content-Type': 'application/json'
-        }
-
-        sensors.append(FrameItSensor(f"{device['name']} Frame Status", f"http://{ip}/status", "status", headers))
-
-    async_add_entities(sensors, True)
+    entities = [
+        FrameItSensor(f"{device_name} Status", f"http://{ip}/status", headers),
+        # Add more sensors as needed
+    ]
+    async_add_entities(entities, True)
 
 class FrameItSensor(Entity):
-    def __init__(self, name, resource, key, headers):
+    def __init__(self, name, resource, headers):
         self._name = name
         self._resource = resource
-        self._key = key
         self._state = None
         self._headers = headers
 
@@ -42,10 +42,8 @@ class FrameItSensor(Entity):
 
     async def async_update(self):
         try:
-            response = await self.hass.async_add_executor_job(
-                requests.get, self._resource, {'headers': self._headers, 'timeout': 10}
-            )
+            response = requests.get(self._resource, headers=self._headers, timeout=10)
             data = response.json()
-            self._state = data.get(self._key)
+            self._state = data.get('status')
         except Exception as e:
-            _LOGGER.error(f"Error fetching data for {self._name}: {e}")
+            _LOGGER.error(f"Error updating {self.name}: {e}")

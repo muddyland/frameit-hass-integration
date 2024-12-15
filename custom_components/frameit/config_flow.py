@@ -1,5 +1,7 @@
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
+
 from .const import DOMAIN
 
 class FrameItConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -7,12 +9,29 @@ class FrameItConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        return FrameItOptionsFlowHandler(config_entry)
+
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
+        errors = {}
         if user_input is not None:
+            device_name = user_input.get("device_name")
+            ip = user_input.get("ip")
+
+            # You can add additional validation logic here if needed
+
             return self.async_create_entry(
-                title="FrameIt Agent Configuration",
-                data={},
+                title=f"FrameIt Device: {device_name}",
+                data=user_input,
             )
 
-        return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
+        data_schema = vol.Schema({
+            vol.Required("device_name"): str,
+            vol.Required("ip"): str,
+            vol.Required("api_key"): str,
+        })
+
+        return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
