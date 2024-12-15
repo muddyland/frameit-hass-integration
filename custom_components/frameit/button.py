@@ -17,7 +17,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api_key = data["api_key"]
     
     entities = [
-        FrameItButton(device_name, f"http://{ip}/system/reboot", api_key)
+        FrameItButton(device_name, f"http://{ip}:5000/system/reboot", api_key)
         # Add more buttons if needed
     ]
 
@@ -52,7 +52,7 @@ class FrameItButton(ButtonEntity):
         }
 
         try:
-            async with homeassistant.helpers.aiohttp_client.async_get_clientsession(self.hass).post(
+            async with async_get_clientsession(self.hass).post(
                 self._resource, headers=headers
             ) as response:
                 response.raise_for_status()

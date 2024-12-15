@@ -16,7 +16,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api_key = data["api_key"]
 
     entities = [
-        FrameItSensor(device_name, f"http://{ip}/status", api_key)
+        FrameItSensor(device_name, f"http://{ip}:5000/status", api_key)
         # Add more sensors as needed
     ]
 
@@ -54,7 +54,7 @@ class FrameItSensor(Entity):
             'Content-Type': 'application/json'
         }
         try:
-            async with homeassistant.helpers.aiohttp_client.async_get_clientsession(self.hass).get(
+            async with async_get_clientsession(self.hass).get(
                 self._resource, headers=headers
             ) as response:
                 data = await response.json()

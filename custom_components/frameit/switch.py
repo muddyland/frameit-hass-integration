@@ -16,7 +16,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api_key = data["api_key"]
 
     entities = [
-        FrameItSwitch(device_name, f"http://{ip}/display", api_key, config_entry.entry_id)
+        FrameItSwitch(device_name, f"http://{ip}:5000/display", api_key, config_entry.entry_id)
         # Add more switches if needed
     ]
 
