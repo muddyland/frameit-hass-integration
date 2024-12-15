@@ -17,7 +17,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api_key = data["api_key"]
     
     entities = [
-        FrameItButton(device_name, f"http://{ip}:5000/system/reboot", api_key)
+        FrameItButton(device_name + " Reboot", f"http://{ip}:5000/system/reboot", api_key)
         # Add more buttons if needed
     ]
 
@@ -37,7 +37,7 @@ class FrameItButton(ButtonEntity):
     def device_info(self):
         """Return device information for the button."""
         return {
-            "identifiers": {(DOMAIN, self._resource)},
+            "identifiers": {(DOMAIN, self._name)},
             "name": self._name,
             "manufacturer": "FrameIt Manufacturer",
             "model": "Smart Frame",
