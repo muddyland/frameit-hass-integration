@@ -1,27 +1,28 @@
 from homeassistant.components.switch import SwitchEntity
 import requests
 import logging
-from .const import DOMAIN, CONF_API_KEY, CONF_DEVICES
+
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    api_key = hass.data[DOMAIN]['api_key']
-    headers = {
-        'X-API-Key': api_key,
-        'Content-Type': 'application/json'
-    }
-
-    devices = hass.data[DOMAIN]['devices']
+async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entities):
+    devices = hass.data.get(DOMAIN, {}).values()
     switches = []
 
     for device in devices:
         ip = device['ip']
-        switches.append(MoviePosterSwitch(device['name'], f"http://{ip}:5000/monitor", headers))
+        api_key = device['api_key']
+        headers = {
+            'X-API-Key': api_key,
+            'Content-Type': 'application/json'
+        }
+
+        switches.append(FrameItSwitch(f"{device['name']} Display", f"http://{ip}/display", headers))
 
     async_add_entities(switches, True)
 
-class MoviePosterSwitch(SwitchEntity):
+class FrameItSwitch(SwitchEntity):
     def __init__(self, name, resource, headers):
         self._name = name
         self._resource = resource
@@ -52,7 +53,7 @@ class MoviePosterSwitch(SwitchEntity):
             data = response.json()
             self._state = data.get("status") == "on"
         except Exception as e:
-            _LOGGER.error(f"Error fetching switch state: {e}")
+            _LOGGER.error(f"Error fetching switch state for {self._name}: {e}")
 
     async def _async_send_request(self, payload):
         try:
@@ -60,4 +61,4 @@ class MoviePosterSwitch(SwitchEntity):
                 requests.post, self._resource, {'data': payload, 'headers': self._headers, 'timeout': 10}
             )
         except Exception as e:
-            _LOGGER.error(f"Error sending request to {self._resource}: {e}")
+            _LOGGER.error(f"Error sending request to {self._name}: {e}")

@@ -1,30 +1,30 @@
-from datetime import timedelta
+from homeassistant.helpers.entity import Entity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 import requests
 import logging
-from homeassistant.helpers.entity import Entity
-from .const import DOMAIN, CONF_API_KEY, CONF_DEVICES
+
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(seconds=60)
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    api_key = hass.data[DOMAIN]['api_key']
-    headers = {
-        'X-API-Key': api_key,
-        'Content-Type': 'application/json'
-    }
-
-    devices = hass.data[DOMAIN]['devices']
+async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities):
+    devices = hass.data.get(DOMAIN, {}).values()
     sensors = []
 
     for device in devices:
         ip = device['ip']
-        sensors.append(MoviePosterSensor(f"{device['name']} CPU Usage", f"http://{ip}:5000/system/stats", "cpu", headers))
-        sensors.append(MoviePosterSensor(f"{device['name']} RAM Usage", f"http://{ip}:5000/system/stats", "mem", headers))
+        api_key = device['api_key']
+        headers = {
+            'X-API-Key': api_key,
+            'Content-Type': 'application/json'
+        }
+
+        sensors.append(FrameItSensor(f"{device['name']} Frame Status", f"http://{ip}/status", "status", headers))
 
     async_add_entities(sensors, True)
 
-class MoviePosterSensor(Entity):
+class FrameItSensor(Entity):
     def __init__(self, name, resource, key, headers):
         self._name = name
         self._resource = resource
@@ -48,4 +48,4 @@ class MoviePosterSensor(Entity):
             data = response.json()
             self._state = data.get(self._key)
         except Exception as e:
-            _LOGGER.error(f"Error fetching data: {e}")
+            _LOGGER.error(f"Error fetching data for {self._name}: {e}")

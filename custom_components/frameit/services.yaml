@@ -1,0 +1,12 @@
+frameit.add_device:
+  description: "Add a new FrameIt device"
+  fields:
+    name:
+      description: "Name of the FrameIt device"
+      example: "FrameIt Living Room"
+    ip:
+      description: "IP Address of the FrameIt device"
+      example: "192.168.1.100"
+    api_key:
+      description: "API Key for the device"
+      example: "your_api_key_here"
