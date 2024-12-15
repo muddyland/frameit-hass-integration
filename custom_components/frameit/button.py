@@ -1,6 +1,8 @@
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
 import logging
 
 from .const import DOMAIN
@@ -50,7 +52,7 @@ class FrameItButton(ButtonEntity):
         }
 
         try:
-            async with hass.helpers.aiohttp_client.async_get_clientsession(self.hass).post(
+            async with homeassistant.helpers.aiohttp_client.async_get_clientsession(self.hass).post(
                 self._resource, headers=headers
             ) as response:
                 response.raise_for_status()
