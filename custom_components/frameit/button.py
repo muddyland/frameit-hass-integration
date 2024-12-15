@@ -1,7 +1,6 @@
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-import requests
 import logging
 
 from .const import DOMAIN
@@ -16,18 +15,17 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api_key = data["api_key"]
     
     entities = [
-        FrameItButton(device_name, f"http://{ip}/system/reboot", api_key, config_entry.entry_id)
+        FrameItButton(device_name, f"http://{ip}/system/reboot", api_key)
         # Add more buttons if needed
     ]
 
     async_add_entities(entities, True)
 
 class FrameItButton(ButtonEntity):
-    def __init__(self, name, resource, api_key, config_entry_id):
+    def __init__(self, name, resource, api_key):
         self._name = name
         self._resource = resource
         self._api_key = api_key
-        self._config_entry_id = config_entry_id
 
     @property
     def name(self):
@@ -52,7 +50,9 @@ class FrameItButton(ButtonEntity):
         }
 
         try:
-            response = requests.post(self._resource, headers=headers, timeout=10)
-            response.raise_for_status()  # Raise an error for unsuccessful HTTP requests
-        except requests.exceptions.RequestException as e:
-            _LOGGER.error(f"Failed to send command for {self.name}: {e}")
+            async with hass.helpers.aiohttp_client.async_get_clientsession(self.hass).post(
+                self._resource, headers=headers
+            ) as response:
+                response.raise_for_status()
+        except Exception as e:
+            _LOGGER.error(f"Error occurred while pressing {self.name}: {e}")

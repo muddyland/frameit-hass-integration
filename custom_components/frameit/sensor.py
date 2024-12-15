@@ -1,9 +1,9 @@
 from homeassistant.helpers.entity import Entity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from .const import DOMAIN
-import requests
 import logging
+
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,19 +15,18 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api_key = data["api_key"]
 
     entities = [
-        FrameItSensor(device_name, f"http://{ip}/status", api_key, config_entry.entry_id)
+        FrameItSensor(device_name, f"http://{ip}/status", api_key)
         # Add more sensors as needed
     ]
 
     async_add_entities(entities, True)
 
 class FrameItSensor(Entity):
-    def __init__(self, name, resource, api_key, config_entry_id):
+    def __init__(self, name, resource, api_key):
         self._name = name
         self._resource = resource
         self._api_key = api_key
         self._state = None
-        self._config_entry_id = config_entry_id
 
     @property
     def name(self):
@@ -39,7 +38,7 @@ class FrameItSensor(Entity):
 
     @property
     def device_info(self):
-        """Return device information for the sensor."""
+        """Return the device information."""
         return {
             "identifiers": {(DOMAIN, self._resource)},
             "name": self._name,
@@ -54,8 +53,10 @@ class FrameItSensor(Entity):
             'Content-Type': 'application/json'
         }
         try:
-            response = requests.get(self._resource, headers=headers, timeout=10)
-            data = response.json()
-            self._state = data.get('status')
+            async with hass.helpers.aiohttp_client.async_get_clientsession(self.hass).get(
+                self._resource, headers=headers
+            ) as response:
+                data = await response.json()
+                self._state = data.get('status')
         except Exception as e:
             _LOGGER.error(f"Error updating {self.name}: {e}")

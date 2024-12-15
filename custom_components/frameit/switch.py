@@ -1,9 +1,9 @@
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from .const import DOMAIN
 import logging
-import requests
+
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,12 +49,14 @@ class FrameItSwitch(SwitchEntity):
         }
 
     async def async_turn_on(self, **kwargs):
-        await self._async_send_request('{"on": "true"}')
+        await self._async_send_request('{"on": true}')
         self._state = True
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs):
-        await self._async_send_request('{"off": "true"}')
+        await self._async_send_request('{"off": true}')
         self._state = False
+        self.async_write_ha_state()
 
     async def async_update(self):
         headers = {
@@ -62,9 +64,10 @@ class FrameItSwitch(SwitchEntity):
             'Content-Type': 'application/json'
         }
         try:
-            response = requests.get(self._resource, headers=headers, timeout=10)
-            data = response.json()
-            self._state = data.get("status") == "on"
+            session = async_get_clientsession(self.hass)
+            async with session.get(self._resource, headers=headers) as response:
+                data = await response.json()
+                self._state = data.get("status") == "on"
         except Exception as e:
             _LOGGER.error(f"Error fetching state for {self.name}: {e}")
 
@@ -74,6 +77,8 @@ class FrameItSwitch(SwitchEntity):
             'Content-Type': 'application/json'
         }
         try:
-            requests.post(self._resource, headers=headers, data=payload, timeout=10)
+            session = async_get_clientsession(self.hass)
+            async with session.post(self._resource, headers=headers, data=payload) as response:
+                response.raise_for_status()
         except Exception as e:
             _LOGGER.error(f"Error sending request to {self.name}: {e}")
