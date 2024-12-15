@@ -1,5 +1,5 @@
 import voluptuous as vol
-from homeassistant import config_entries
+from homeassistant import config_entries, exceptions
 from homeassistant.core import callback
 from .const import DOMAIN, CONF_API_KEY, CONF_DEVICES
 
@@ -40,8 +40,13 @@ class MoviePosterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_device_finished(self, user_input=None):
-        """Finish the configuration or add more devices."""
-        if user_input:
+        """Decide if we add another device or finish."""
+        if user_input is not None:
+            # Ensure user_input is handled as a decision to finish
+            # or add more devices
+            if user_input.get("add_another_device", False):
+                return await self.async_step_add_device()
+
             return self.async_create_entry(
                 title="Movie Posters",
                 data={CONF_API_KEY: self.api_key, CONF_DEVICES: self.devices},
@@ -49,6 +54,23 @@ class MoviePosterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="device_finished",
+            data_schema=vol.Schema({
+                vol.Optional("add_another_device", default=False): bool
+            }),
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        return OptionsFlowHandler(config_entry)
+
+class OptionsFlowHandler(config_entries.OptionsFlow):
+    def __init__(self, config_entry):
+        self.config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        """Manage the options."""
+        return self.async_show_form(
+            step_id="init",
             data_schema=vol.Schema({}),
-            description_placeholders={"step": len(self.devices)},
         )
