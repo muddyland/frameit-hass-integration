@@ -19,12 +19,11 @@ class FrameItConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
         if user_input is not None:
             device_name = user_input.get("device_name")
-            ip = user_input.get("ip")
 
             # You can add additional validation logic here if needed
 
             return self.async_create_entry(
-                title=f"FrameIt Device: {device_name}",
+                title=f"{device_name}",
                 data=user_input,
             )
 

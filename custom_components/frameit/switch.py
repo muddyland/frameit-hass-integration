@@ -24,7 +24,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
 
 class FrameItSwitch(SwitchEntity):
     def __init__(self, name, resource, api_key, config_entry_id):
-        self._name = name
+        self._name = name + " Monitor"
+        self._device_name = name
         self._resource = resource
         self._api_key = api_key
         self._state = False
@@ -40,13 +41,12 @@ class FrameItSwitch(SwitchEntity):
 
     @property
     def device_info(self):
-        """Return device information for the switch."""
+        """Return the device information."""
         return {
-            "identifiers": {(DOMAIN, self._name)},
+            "identifiers": {(DOMAIN, self._device_name)},
             "name": self._name,
-            "manufacturer": "FrameIt Manufacturer",
+            "manufacturer": "FrameIt",
             "model": "Smart Frame",
-            "via_device": (DOMAIN, self._resource)
         }
 
     async def async_turn_on(self, **kwargs):

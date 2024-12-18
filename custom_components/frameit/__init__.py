@@ -20,8 +20,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     device_registry = dr.async_get(hass)
     device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, ip)},
-        manufacturer="FrameIt Manufacturer",
+        identifiers={(DOMAIN, device_name)},
+        manufacturer="FrameIt",
         model="Smart Frame",
         name=device_name,
         sw_version="1.0",  # Adjust the software version appropriately
@@ -32,7 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     for component in ("sensor", "switch", "button"):
         hass.async_create_task(
-            hass.config_entries.async_forward_entry_setup(entry, component)
+            await hass.config_entries.async_forward_entry_setup(entry, component)
         )
 
     return True

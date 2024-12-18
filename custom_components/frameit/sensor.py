@@ -16,8 +16,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     api_key = data["api_key"]
 
     entities = [
-        FrameItCPU(device_name + " CPU", f"http://{ip}:5000/system/stats", api_key),
-        FrameItMem(device_name + " RAM", f"http://{ip}:5000/system/stats", api_key)
+        FrameItCPU(device_name, f"http://{ip}:5000/system/stats", api_key),
+        FrameItMem(device_name, f"http://{ip}:5000/system/stats", api_key)
         # Add more sensors as needed
     ]
 
@@ -25,7 +25,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
 
 class FrameItMem(Entity):
     def __init__(self, name, resource, api_key):
-        self._name = name
+        self._name = name + " RAM"
+        self._device_name = name
         self._resource = resource
         self._api_key = api_key
         self._state = None
@@ -42,11 +43,10 @@ class FrameItMem(Entity):
     def device_info(self):
         """Return the device information."""
         return {
-            "identifiers": {(DOMAIN, self._name)},
+            "identifiers": {(DOMAIN, self._device_name)},
             "name": self._name,
-            "manufacturer": "FrameIt Manufacturer",
+            "manufacturer": "FrameIt",
             "model": "Smart Frame",
-            "via_device": (DOMAIN, self._resource)
         }
 
     async def async_update(self):
@@ -64,7 +64,8 @@ class FrameItMem(Entity):
             _LOGGER.error(f"Error updating {self.name}: {e}")
 class FrameItCPU(Entity):
     def __init__(self, name, resource, api_key):
-        self._name = name
+        self._name = name + " CPU"
+        self._device_name = name
         self._resource = resource
         self._api_key = api_key
         self._state = None
@@ -81,11 +82,10 @@ class FrameItCPU(Entity):
     def device_info(self):
         """Return the device information."""
         return {
-            "identifiers": {(DOMAIN, self._name)},
+            "identifiers": {(DOMAIN, self._device_name)},
             "name": self._name,
-            "manufacturer": "FrameIt Manufacturer",
+            "manufacturer": "FrameIt",
             "model": "Smart Frame",
-            "via_device": (DOMAIN, self._resource)
         }
 
     async def async_update(self):
