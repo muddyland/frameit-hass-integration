@@ -29,12 +29,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     # Store device-specific data under its own entry_id
     hass.data[DOMAIN][entry.entry_id] = entry.data
-
-    for component in ("sensor", "switch", "button"):
-        hass.async_create_task(
-            await hass.config_entries.async_forward_entry_setup(entry, component)
-        )
-
+    await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "switch", "button"])
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
