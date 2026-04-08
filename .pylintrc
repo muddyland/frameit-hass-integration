@@ -1,0 +1,47 @@
+[MASTER]
+# Add the project root so pylint can resolve custom_components imports.
+init-hook='import sys; sys.path.insert(0, ".")'
+
+[MESSAGES CONTROL]
+disable =
+    # HA entity description classes use @dataclass internally; pylint cannot
+    # infer their constructor arguments from the frozen dataclass inheritance.
+    unexpected-keyword-arg,
+
+    # HA uses async_press / async_turn_on / async_select_option instead of the
+    # sync abstract methods declared on the base class. Pylint sees these as
+    # unimplemented abstract methods — they are not.
+    abstract-method,
+
+    # Docstrings are not required for small HA platform functions and entities.
+    missing-module-docstring,
+    missing-function-docstring,
+    missing-class-docstring,
+
+    # HA's CoordinatorEntity accesses coordinator internals via _base_url;
+    # single-underscore access is intentional here.
+    protected-access,
+
+    # Broad exception catches are intentional in agent-proxy helpers where
+    # the agent may be unreachable for many different reasons.
+    broad-exception-caught,
+
+    # ConfigFlow subclasses intentionally expose only one public method
+    # (async_step_user); the framework calls the rest indirectly.
+    too-few-public-methods,
+
+[FORMAT]
+max-line-length = 120
+
+[DESIGN]
+max-args = 8
+max-attributes = 12
+max-public-methods = 30
+
+[SIMILARITIES]
+min-similarity-lines = 8
+ignore-imports = yes
+
+[TYPECHECK]
+# HA's homeassistant package uses dynamic attribute generation in several places.
+ignored-modules = homeassistant
