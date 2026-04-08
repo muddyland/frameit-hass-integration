@@ -5,6 +5,7 @@ import logging
 import os
 
 from homeassistant.components import frontend
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
@@ -21,7 +22,9 @@ _WWW_DIR = os.path.join(os.path.dirname(__file__), "www")
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # pylint: disable=unused-argument
     """Register static assets and brand icon JS (runs once at domain load)."""
-    hass.http.register_static_path("/frameit_www", _WWW_DIR, cache_headers=True)
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig("/frameit_www", _WWW_DIR, cache_headers=True)]
+    )
     frontend.add_extra_js_url(hass, "/frameit_www/brand.js")
     return True
 
