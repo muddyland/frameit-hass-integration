@@ -67,6 +67,11 @@ MOCK_SYSTEM_INFO = {
 MOCK_DISPLAY_ON = {"on": True}
 MOCK_DISPLAY_OFF = {"on": False}
 
+# Same as Living Room's agent_version — no update by default
+MOCK_SERVER_VERSION = "abc123def456"
+# A different version used by tests that need an update to be available
+MOCK_SERVER_VERSION_NEW = "999999999999"
+
 
 # ---------------------------------------------------------------------------
 # Shared fixture — a pre-configured mock FrameITApiClient
@@ -82,6 +87,8 @@ def mock_client():
     client.get_frames = AsyncMock(return_value=MOCK_FRAMES)
     client.get_system_info = AsyncMock(return_value=MOCK_SYSTEM_INFO)
     client.get_display = AsyncMock(return_value=MOCK_DISPLAY_ON)
+    client.get_server_agent_version = AsyncMock(return_value=MOCK_SERVER_VERSION)
+    client.trigger_agent_update = AsyncMock()
     client.set_display = AsyncMock()
     client.send_command = AsyncMock()
     client.reboot = AsyncMock()
@@ -106,4 +113,5 @@ def mock_coordinator_data():
                 "display": MOCK_DISPLAY_ON,
             }
         },
+        "server_agent_version": MOCK_SERVER_VERSION,
     }

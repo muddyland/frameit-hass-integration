@@ -153,3 +153,20 @@ class FrameITApiClient:
 
     async def reboot(self, frame_id: int) -> None:
         await self._request("POST", f"/api/frames/{frame_id}/agent/system/reboot")
+
+    async def trigger_agent_update(self, frame_id: int) -> None:
+        """Tell the agent to download and apply the latest version."""
+        await self._request(
+            "POST", f"/api/frames/{frame_id}/agent/system/agent-update"
+        )
+
+    async def get_server_agent_version(self) -> str | None:
+        """Return the server's current agent version hash, or None on error."""
+        try:
+            resp = await self._request("GET", "/api/agent/version")
+            if resp.status == 200:
+                data = await resp.json()
+                return data.get("version")
+        except Exception:  # pylint: disable=broad-except
+            pass
+        return None

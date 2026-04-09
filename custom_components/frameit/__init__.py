@@ -15,17 +15,18 @@ from .coordinator import FrameITCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "switch", "button", "select"]
+PLATFORMS = ["update", "sensor", "switch", "button", "select"]
 
 _WWW_DIR = os.path.join(os.path.dirname(__file__), "www")
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # pylint: disable=unused-argument
     """Register static assets and brand icon JS (runs once at domain load)."""
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig("/frameit_www", _WWW_DIR, cache_headers=True)]
-    )
-    frontend.add_extra_js_url(hass, "/frameit_www/brand.js")
+    if hass.http:
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig("/frameit_www", _WWW_DIR, cache_headers=True)]
+        )
+        frontend.add_extra_js_url(hass, "/frameit_www/brand.js")
     return True
 
 

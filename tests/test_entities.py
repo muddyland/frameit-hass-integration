@@ -12,6 +12,7 @@ from custom_components.frameit.const import DOMAIN
 from tests.conftest import (
     MOCK_DISPLAY_OFF,
     MOCK_PASSWORD,
+    MOCK_SERVER_VERSION_NEW,
     MOCK_URL,
     MOCK_USERNAME,
     mock_client,          # re-export so pytest sees it as a fixture
@@ -192,6 +193,84 @@ async def test_select_content_mode_change(hass: HomeAssistant, setup_integration
         blocking=True,
     )
     mock_client.update_frame.assert_awaited_once_with(1, {"content_mode": "pinned"})
+
+
+# ---------------------------------------------------------------------------
+# Update entity
+# ---------------------------------------------------------------------------
+
+
+async def test_update_entity_no_update(hass: HomeAssistant, setup_integration):
+    """State is off when installed version matches the server version."""
+    state = hass.states.get("update.living_room_agent")
+    assert state is not None
+    assert state.state == "off"
+    assert state.attributes["installed_version"] == "abc123def456"
+    assert state.attributes["latest_version"] == "abc123def456"
+
+
+async def test_update_entity_update_available(
+    hass: HomeAssistant, mock_client, mock_coordinator_data
+):
+    """State is on when the server has a newer version."""
+    mock_coordinator_data["server_agent_version"] = MOCK_SERVER_VERSION_NEW
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"url": MOCK_URL, "username": MOCK_USERNAME, "password": MOCK_PASSWORD},
+        entry_id="test_frameit_update",
+    )
+    entry.add_to_hass(hass)
+    with (
+        patch("custom_components.frameit.FrameITApiClient", return_value=mock_client),
+        patch(
+            "custom_components.frameit.coordinator.FrameITCoordinator._async_update_data",
+            return_value=mock_coordinator_data,
+        ),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    state = hass.states.get("update.living_room_agent")
+    assert state is not None
+    assert state.state == "on"
+    assert state.attributes["installed_version"] == "abc123def456"
+    assert state.attributes["latest_version"] == MOCK_SERVER_VERSION_NEW
+
+
+async def test_update_entity_install(
+    hass: HomeAssistant, mock_client, mock_coordinator_data
+):
+    """Calling update.install triggers agent update — requires an update to be available."""
+    mock_coordinator_data["server_agent_version"] = MOCK_SERVER_VERSION_NEW
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"url": MOCK_URL, "username": MOCK_USERNAME, "password": MOCK_PASSWORD},
+        entry_id="test_frameit_install",
+    )
+    entry.add_to_hass(hass)
+    with (
+        patch("custom_components.frameit.FrameITApiClient", return_value=mock_client),
+        patch(
+            "custom_components.frameit.coordinator.FrameITCoordinator._async_update_data",
+            return_value=mock_coordinator_data,
+        ),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        "update", "install",
+        {"entity_id": "update.living_room_agent"},
+        blocking=True,
+    )
+    mock_client.trigger_agent_update.assert_awaited_once_with(1)
+
+
+async def test_update_entity_not_created_for_agentless_frame(
+    hass: HomeAssistant, setup_integration
+):
+    """Bedroom has no agent — no update entity should be created."""
+    assert hass.states.get("update.bedroom_agent") is None
 
 
 # ---------------------------------------------------------------------------

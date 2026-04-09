@@ -48,7 +48,8 @@ class FrameITCoordinator(DataUpdateCoordinator):
         else:
             agent_info = {}
 
-        return {"frames": frames, "agent_info": agent_info}
+        server_agent_version = await self.client.get_server_agent_version()
+        return {"frames": frames, "agent_info": agent_info, "server_agent_version": server_agent_version}
 
     async def _fetch_agent_info(self, frame_id: int) -> dict:
         system_info, display = await asyncio.gather(
