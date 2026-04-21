@@ -160,6 +160,22 @@ class FrameITApiClient:
             "POST", f"/api/frames/{frame_id}/agent/system/agent-update"
         )
 
+    # ------------------------------------------------------------------
+    # Library — posters and trailers
+    # ------------------------------------------------------------------
+
+    async def get_posters(self) -> list[dict]:
+        resp = await self._request("GET", "/api/posters")
+        return await resp.json()
+
+    async def get_trailers(self) -> list[dict]:
+        resp = await self._request("GET", "/api/trailers")
+        return await resp.json()
+
+    # ------------------------------------------------------------------
+    # Agent version
+    # ------------------------------------------------------------------
+
     async def get_server_agent_version(self) -> str | None:
         """Return the server's current agent version hash, or None on error."""
         try:

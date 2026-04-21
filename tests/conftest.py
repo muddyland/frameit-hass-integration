@@ -38,6 +38,12 @@ MOCK_FRAMES = [
         "content_mode": "pool",
         "pinned_type": None,
         "pinned_id": None,
+        "preview": {
+            "type": "poster",
+            "shown_at": "2024-01-01T12:00:00",
+            "thumb_url": "/images/poster1.jpg",
+            "title": "Poster One",
+        },
     },
     {
         "id": 2,
@@ -52,6 +58,7 @@ MOCK_FRAMES = [
         "content_mode": "pinned",
         "pinned_type": "poster",
         "pinned_id": 3,
+        "preview": None,
     },
 ]
 
@@ -72,6 +79,52 @@ MOCK_SERVER_VERSION = "abc123def456"
 # A different version used by tests that need an update to be available
 MOCK_SERVER_VERSION_NEW = "999999999999"
 
+MOCK_POSTERS = [
+    {
+        "id": 1,
+        "filename": "poster1.jpg",
+        "url": "/images/poster1.jpg",
+        "title_above": "Poster One",
+        "title_below": None,
+        "sort_order": 0,
+        "active": True,
+        "created_at": "2024-01-01T12:00:00",
+    },
+    {
+        "id": 2,
+        "filename": "poster2.jpg",
+        "url": "/images/poster2.jpg",
+        "title_above": None,
+        "title_below": "Poster Two",
+        "sort_order": 1,
+        "active": True,
+        "created_at": "2024-01-02T12:00:00",
+    },
+]
+
+MOCK_TRAILERS = [
+    {
+        "id": 1,
+        "youtube_id": "dQw4w9WgXcQ",
+        "title": "Test Trailer",
+        "active": True,
+        "created_at": "2024-01-01T12:00:00",
+        "cache_status": "ready",
+        "cached_url": "/videos/dQw4w9WgXcQ.mp4",
+        "thumb_url": "/videos/dQw4w9WgXcQ.jpg",
+    },
+    {
+        "id": 2,
+        "youtube_id": "xxxxxxxxxxx",
+        "title": "Pending Trailer",
+        "active": True,
+        "created_at": "2024-01-02T12:00:00",
+        "cache_status": "pending",
+        "cached_url": None,
+        "thumb_url": "https://i.ytimg.com/vi/xxxxxxxxxxx/hqdefault.jpg",
+    },
+]
+
 
 # ---------------------------------------------------------------------------
 # Shared fixture — a pre-configured mock FrameITApiClient
@@ -88,6 +141,8 @@ def mock_client():
     client.get_system_info = AsyncMock(return_value=MOCK_SYSTEM_INFO)
     client.get_display = AsyncMock(return_value=MOCK_DISPLAY_ON)
     client.get_server_agent_version = AsyncMock(return_value=MOCK_SERVER_VERSION)
+    client.get_posters = AsyncMock(return_value=MOCK_POSTERS)
+    client.get_trailers = AsyncMock(return_value=MOCK_TRAILERS)
     client.trigger_agent_update = AsyncMock()
     client.set_display = AsyncMock()
     client.send_command = AsyncMock()

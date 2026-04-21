@@ -15,7 +15,7 @@ from .coordinator import FrameITCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["update", "sensor", "switch", "button", "select"]
+PLATFORMS = ["update", "sensor", "switch", "button", "select", "media_player"]
 
 _WWW_DIR = os.path.join(os.path.dirname(__file__), "www")
 
@@ -26,6 +26,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # pylint: dis
         await hass.http.async_register_static_paths(
             [StaticPathConfig("/frameit_www", _WWW_DIR, cache_headers=True)]
         )
+    # frontend_extra_module_url is populated by the frontend component; guard
+    # here so minimal test environments (where frontend isn't loaded) don't crash.
+    if "frontend_extra_module_url" in hass.data:
         frontend.add_extra_js_url(hass, "/frameit_www/brand.js")
     return True
 

@@ -5,7 +5,7 @@
   "documentation": "https://github.com/your-repo/frameit-integration",
   "issue_tracker": "https://github.com/your-repo/frameit-integration/issues",
   "requirements": [],
-  "dependencies": [],
+  "dependencies": ["media_source"],
   "codeowners": [],
   "iot_class": "local_polling",
   "config_flow": true
