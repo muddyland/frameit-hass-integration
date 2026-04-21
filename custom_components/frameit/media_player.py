@@ -10,6 +10,7 @@ from homeassistant.components.media_player import (
     MediaPlayerState,
     MediaType,
 )
+from homeassistant.components.media_source import async_browse_media as ms_browse_media
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -137,13 +138,9 @@ class FrameITMediaPlayer(FrameITEntity, MediaPlayerEntity):
         media_content_type: str | None = None,
         media_content_id: str | None = None,
     ) -> BrowseMedia:
-        from homeassistant.components.media_source import (
-            async_browse_media as ms_browse,
-        )
-
         if not media_content_id:
             media_content_id = (
                 f"media-source://{DOMAIN}/{self.coordinator.config_entry.entry_id}"
             )
 
-        return await ms_browse(self.hass, media_content_id)
+        return await ms_browse_media(self.hass, media_content_id)
