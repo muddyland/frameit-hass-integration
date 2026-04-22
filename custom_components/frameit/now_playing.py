@@ -209,8 +209,7 @@ class NowPlayingManager:
         return None
 
     async def _ha_base_url(self) -> str:
-        from homeassistant.helpers.network import get_url
-        from homeassistant.exceptions import NoURLAvailableError
+        from homeassistant.helpers.network import get_url, NoURLAvailableError
 
         try:
             return get_url(
