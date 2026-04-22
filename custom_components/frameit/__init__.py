@@ -12,10 +12,11 @@ from homeassistant.core import HomeAssistant
 from .api import FrameITApiClient, FrameITAuthError, FrameITConnectionError
 from .const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, DOMAIN
 from .coordinator import FrameITCoordinator
+from .now_playing import NowPlayingManager
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["update", "sensor", "switch", "button", "select", "number", "media_player"]
+PLATFORMS = ["update", "sensor", "switch", "button", "select", "number", "text", "media_player"]
 
 _WWW_DIR = os.path.join(os.path.dirname(__file__), "www")
 
@@ -55,9 +56,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = FrameITCoordinator(hass, client)
     await coordinator.async_config_entry_first_refresh()
 
+    now_playing = NowPlayingManager(hass, entry, coordinator)
+    await now_playing.async_load()
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "coordinator": coordinator,
         "client": client,
+        "now_playing": now_playing,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -69,5 +74,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
+        data["now_playing"].async_stop()
         await data["client"].close()
     return unload_ok

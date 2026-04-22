@@ -196,6 +196,28 @@ class FrameITApiClient:
         resp = await self._request("GET", "/api/trailers")
         return await resp.json()
 
+    async def upload_poster(
+        self,
+        image_data: bytes,
+        filename: str,
+        title_above: str | None = None,
+        title_below: str | None = None,
+    ) -> dict:
+        """Upload image bytes as a new poster. Returns the created poster dict."""
+        form = aiohttp.FormData()
+        form.add_field("file", image_data, filename=filename, content_type="image/jpeg")
+        if title_above:
+            form.add_field("title_above", title_above)
+        if title_below:
+            form.add_field("title_below", title_below)
+        # inactive so it doesn't appear in pool rotation or active counts
+        form.add_field("active", "false")
+        resp = await self._request("POST", "/api/posters/upload", data=form)
+        return await resp.json()
+
+    async def delete_poster(self, poster_id: int) -> None:
+        await self._request("DELETE", f"/api/posters/{poster_id}")
+
     # ------------------------------------------------------------------
     # Agent version
     # ------------------------------------------------------------------

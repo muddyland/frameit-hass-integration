@@ -148,6 +148,8 @@ def mock_client():
     client.get_trailers = AsyncMock(return_value=MOCK_TRAILERS)
     client.trigger_agent_update = AsyncMock()
     client.restart_service = AsyncMock()
+    client.upload_poster = AsyncMock(return_value={"id": 99, "url": "/images/now_playing_1.jpg"})
+    client.delete_poster = AsyncMock()
     client.set_display = AsyncMock()
     client.send_command = AsyncMock()
     client.reboot = AsyncMock()

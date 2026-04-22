@@ -183,7 +183,7 @@ async def test_select_content_mode_pinned(hass: HomeAssistant, setup_integration
 
 async def test_select_content_mode_options(hass: HomeAssistant, setup_integration):
     state = hass.states.get("select.living_room_content_mode")
-    assert set(state.attributes["options"]) == {"pool", "pinned"}
+    assert set(state.attributes["options"]) == {"pool", "pinned", "now-playing"}
 
 
 async def test_select_content_mode_change(hass: HomeAssistant, setup_integration, mock_client):
