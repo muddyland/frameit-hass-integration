@@ -15,7 +15,7 @@ from .coordinator import FrameITCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["update", "sensor", "switch", "button", "select", "media_player"]
+PLATFORMS = ["update", "sensor", "switch", "button", "select", "number", "media_player"]
 
 _WWW_DIR = os.path.join(os.path.dirname(__file__), "www")
 

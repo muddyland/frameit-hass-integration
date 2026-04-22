@@ -79,6 +79,8 @@ MOCK_SERVER_VERSION = "abc123def456"
 # A different version used by tests that need an update to be available
 MOCK_SERVER_VERSION_NEW = "999999999999"
 
+MOCK_SERVICES = {"frameit-agent": True, "frameit-ui": True}
+
 MOCK_POSTERS = [
     {
         "id": 1,
@@ -140,10 +142,12 @@ def mock_client():
     client.get_frames = AsyncMock(return_value=MOCK_FRAMES)
     client.get_system_info = AsyncMock(return_value=MOCK_SYSTEM_INFO)
     client.get_display = AsyncMock(return_value=MOCK_DISPLAY_ON)
+    client.get_services = AsyncMock(return_value=MOCK_SERVICES)
     client.get_server_agent_version = AsyncMock(return_value=MOCK_SERVER_VERSION)
     client.get_posters = AsyncMock(return_value=MOCK_POSTERS)
     client.get_trailers = AsyncMock(return_value=MOCK_TRAILERS)
     client.trigger_agent_update = AsyncMock()
+    client.restart_service = AsyncMock()
     client.set_display = AsyncMock()
     client.send_command = AsyncMock()
     client.reboot = AsyncMock()
@@ -166,7 +170,10 @@ def mock_coordinator_data():
             1: {
                 "system_info": MOCK_SYSTEM_INFO,
                 "display": MOCK_DISPLAY_ON,
+                "services": MOCK_SERVICES,
             }
         },
         "server_agent_version": MOCK_SERVER_VERSION,
+        "posters": MOCK_POSTERS,
+        "trailers": MOCK_TRAILERS,
     }

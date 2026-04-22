@@ -161,6 +161,30 @@ class FrameITApiClient:
         )
 
     # ------------------------------------------------------------------
+    # Services
+    # ------------------------------------------------------------------
+
+    async def get_services(self, frame_id: int) -> dict | None:
+        """Return {frameit-agent: bool, frameit-ui: bool}, or None if unreachable."""
+        try:
+            resp = await self._request(
+                "GET",
+                f"/api/frames/{frame_id}/agent/system/services",
+                timeout=aiohttp.ClientTimeout(total=5),
+            )
+            if resp.status == 200:
+                return await resp.json()
+        except Exception:  # pylint: disable=broad-except
+            pass
+        return None
+
+    async def restart_service(self, frame_id: int, name: str) -> None:
+        await self._request(
+            "POST",
+            f"/api/frames/{frame_id}/agent/system/services/{name}/restart",
+        )
+
+    # ------------------------------------------------------------------
     # Library — posters and trailers
     # ------------------------------------------------------------------
 

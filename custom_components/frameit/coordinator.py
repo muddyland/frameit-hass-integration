@@ -49,11 +49,26 @@ class FrameITCoordinator(DataUpdateCoordinator):
             agent_info = {}
 
         server_agent_version = await self.client.get_server_agent_version()
-        return {"frames": frames, "agent_info": agent_info, "server_agent_version": server_agent_version}
+
+        try:
+            posters = await self.client.get_posters()
+            trailers = await self.client.get_trailers()
+        except Exception:  # pylint: disable=broad-except
+            posters = []
+            trailers = []
+
+        return {
+            "frames": frames,
+            "agent_info": agent_info,
+            "server_agent_version": server_agent_version,
+            "posters": posters,
+            "trailers": trailers,
+        }
 
     async def _fetch_agent_info(self, frame_id: int) -> dict:
-        system_info, display = await asyncio.gather(
+        system_info, display, services = await asyncio.gather(
             self.client.get_system_info(frame_id),
             self.client.get_display(frame_id),
+            self.client.get_services(frame_id),
         )
-        return {"system_info": system_info, "display": display}
+        return {"system_info": system_info, "display": display, "services": services}

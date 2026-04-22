@@ -60,6 +60,11 @@ class FrameITEntity(CoordinatorEntity[FrameITCoordinator]):
         return ai["display"] if ai else None
 
     @property
+    def _services(self) -> dict | None:
+        ai = self._agent_info
+        return ai.get("services") if ai else None
+
+    @property
     def available(self) -> bool:
         """Mark unavailable if coordinator data is absent."""
         return self.coordinator.last_update_success and self._frame is not None
