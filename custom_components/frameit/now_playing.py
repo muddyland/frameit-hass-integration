@@ -155,6 +155,11 @@ class NowPlayingManager:
         if not image_data:
             return
 
+        # Use the player's own metadata when available; passing None lets the
+        # frame fall back to the cycling banner-text defaults in Settings.
+        title_above = state.attributes.get("media_title") or None
+        title_below = state.attributes.get("app_name") or None
+
         client = self._coordinator.client
 
         old_poster_id = cfg.get("poster_id")
@@ -169,8 +174,8 @@ class NowPlayingManager:
             poster = await client.upload_poster(
                 image_data,
                 f"now_playing_{frame_id}.jpg",
-                title_above="Now Playing",
-                title_below="In Theater",
+                title_above=title_above,
+                title_below=title_below,
             )
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.warning("Failed to upload now-playing artwork for frame %s: %s", frame_id, exc)

@@ -215,7 +215,8 @@ async def test_manager_disable_cleans_up(hass: HomeAssistant, mgr):
 async def test_manager_push_uploads_and_pins(hass: HomeAssistant, mgr):
     mgr._config[1] = {"source": "media_player.atv", "active": True}
 
-    # Simulate Apple TV playing with an entity picture
+    # No media_title or app_name — both title fields should be None so the
+    # frame falls back to the cycling banner-text defaults in Settings.
     hass.states.async_set(
         "media_player.atv",
         "playing",
@@ -228,14 +229,38 @@ async def test_manager_push_uploads_and_pins(hass: HomeAssistant, mgr):
     mgr._coordinator.client.upload_poster.assert_awaited_once_with(
         b"fake-image-data",
         "now_playing_1.jpg",
-        title_above="Now Playing",
-        title_below="In Theater",
+        title_above=None,
+        title_below=None,
     )
     mgr._coordinator.client.update_frame.assert_awaited_once_with(
         1,
         {"content_mode": "pinned", "pinned_type": "poster", "pinned_id": 99},
     )
     assert mgr._config[1]["poster_id"] == 99
+
+
+async def test_manager_push_uses_media_metadata(hass: HomeAssistant, mgr):
+    mgr._config[1] = {"source": "media_player.atv", "active": True}
+
+    hass.states.async_set(
+        "media_player.atv",
+        "playing",
+        {
+            "entity_picture": "https://example.com/artwork.jpg",
+            "media_title": "Inception",
+            "app_name": "Plex",
+        },
+    )
+
+    with patch.object(mgr, "_download", AsyncMock(return_value=b"fake-image-data")):
+        await mgr._push(1)
+
+    mgr._coordinator.client.upload_poster.assert_awaited_once_with(
+        b"fake-image-data",
+        "now_playing_1.jpg",
+        title_above="Inception",
+        title_below="Plex",
+    )
 
 
 async def test_manager_push_skips_when_no_entity_picture(hass: HomeAssistant, mgr):
