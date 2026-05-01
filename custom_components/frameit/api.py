@@ -219,6 +219,20 @@ class FrameITApiClient:
         await self._request("DELETE", f"/api/posters/{poster_id}")
 
     # ------------------------------------------------------------------
+    # Global settings
+    # ------------------------------------------------------------------
+
+    async def get_settings(self) -> dict:
+        """Return the global FrameIT settings dict."""
+        resp = await self._request("GET", "/api/settings")
+        return await resp.json()
+
+    async def update_settings(self, data: dict) -> dict:
+        """Patch global settings; returns the updated settings dict."""
+        resp = await self._request("PATCH", "/api/settings", json=data)
+        return await resp.json()
+
+    # ------------------------------------------------------------------
     # Agent version
     # ------------------------------------------------------------------
 

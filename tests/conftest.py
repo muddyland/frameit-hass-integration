@@ -104,6 +104,28 @@ MOCK_POSTERS = [
     },
 ]
 
+MOCK_SETTINGS = {
+    "default_title_above": "Now Playing",
+    "default_title_below": "",
+    "default_interval_seconds": 300,
+    "default_rotation": 0,
+    "default_content_mode": "pool",
+    "default_pinned_type": None,
+    "default_pinned_id": None,
+    "pool_order": "random",
+    "trailer_weight_percent": None,
+    "dashboard_refresh_seconds": 30,
+    "log_retention_days": None,
+    "default_title_above_options": (
+        "Now Playing\nComing Soon\nNow in Theaters\n"
+        "Get Your Tickets\nFeature Presentation\nNow Showing"
+    ),
+    "default_title_below_options": (
+        "Now in Theaters\nOnly in Theaters\nReserve Your Seats Today\n"
+        "Experience the Magic\nComing Soon to Theaters"
+    ),
+}
+
 MOCK_TRAILERS = [
     {
         "id": 1,
@@ -146,6 +168,8 @@ def mock_client():
     client.get_server_agent_version = AsyncMock(return_value=MOCK_SERVER_VERSION)
     client.get_posters = AsyncMock(return_value=MOCK_POSTERS)
     client.get_trailers = AsyncMock(return_value=MOCK_TRAILERS)
+    client.get_settings = AsyncMock(return_value=MOCK_SETTINGS)
+    client.update_settings = AsyncMock(return_value=MOCK_SETTINGS)
     client.trigger_agent_update = AsyncMock()
     client.restart_service = AsyncMock()
     client.upload_poster = AsyncMock(return_value={"id": 99, "url": "/images/now_playing_1.jpg"})
@@ -178,4 +202,5 @@ def mock_coordinator_data():
         "server_agent_version": MOCK_SERVER_VERSION,
         "posters": MOCK_POSTERS,
         "trailers": MOCK_TRAILERS,
+        "settings": MOCK_SETTINGS,
     }

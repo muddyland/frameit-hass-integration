@@ -53,9 +53,11 @@ class FrameITCoordinator(DataUpdateCoordinator):
         try:
             posters = await self.client.get_posters()
             trailers = await self.client.get_trailers()
+            settings = await self.client.get_settings()
         except Exception:  # pylint: disable=broad-except
             posters = []
             trailers = []
+            settings = {}
 
         return {
             "frames": frames,
@@ -63,6 +65,7 @@ class FrameITCoordinator(DataUpdateCoordinator):
             "server_agent_version": server_agent_version,
             "posters": posters,
             "trailers": trailers,
+            "settings": settings,
         }
 
     async def _fetch_agent_info(self, frame_id: int) -> dict:
