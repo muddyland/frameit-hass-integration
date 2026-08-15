@@ -14,15 +14,26 @@
           "username": "FrameIT admin username",
           "password": "FrameIT admin password"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with FrameIT",
+        "description": "The FrameIT admin password for {url} is no longer accepted. Changing it on the server signs every other session out — enter the current credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
       }
     },
     "error": {
       "cannot_connect": "Unable to reach the FrameIT server. Check the URL and that the server is running.",
       "invalid_auth": "Invalid username or password.",
-      "unknown": "An unexpected error occurred."
+      "unknown": "An unexpected error occurred.",
+      "too_many_attempts": "The FrameIT server is temporarily blocking sign-in attempts from Home Assistant. Wait a few minutes and try again."
     },
     "abort": {
-      "already_configured": "This FrameIT server is already configured."
+      "already_configured": "This FrameIT server is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "reauth_failed": "Could not find the configuration entry to re-authenticate."
     }
   }
 }

@@ -1,4 +1,4 @@
-"""Switch platform for FrameIT — display on/off and service control."""
+"""Switch platform for FrameIT — display, service control, and server security."""
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
@@ -7,9 +7,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, SECURITY_SETTINGS
 from .coordinator import FrameITCoordinator
-from .entity import FrameITEntity
+from .entity import FrameITEntity, FrameITServerEntity
 
 _SERVICE_META: dict[str, tuple[str, str]] = {
     "frameit-agent": ("Agent Service", "mdi:robot"),
@@ -28,6 +28,13 @@ async def async_setup_entry(
             entities.append(FrameITDisplaySwitch(coordinator, frame))
             for svc in _SERVICE_META:
                 entities.append(FrameITServiceSwitch(coordinator, frame, svc))
+
+    settings = coordinator.data.get("settings") or {}
+    entities.extend(
+        FrameITSecuritySwitch(coordinator, key, name, icon)
+        for key, name, icon in SECURITY_SETTINGS
+        if key in settings
+    )
 
     async_add_entities(entities)
 
@@ -103,4 +110,50 @@ class FrameITServiceSwitch(FrameITEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.client.restart_service(self._frame_id, self._service)
+        await self.coordinator.async_request_refresh()
+
+
+class FrameITSecuritySwitch(FrameITServerEntity, SwitchEntity):
+    """A server-wide security setting from Settings → Security.
+
+    Turning *Require agent authentication* on cuts off any agent still on the
+    legacy credential, and *Require frame tokens* blanks any display that has
+    not reloaded since the upgrade — check the matching diagnostic sensors
+    before flipping either.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        coordinator: FrameITCoordinator,
+        key: str,
+        name: str,
+        icon: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_name = name
+        self._attr_icon = icon
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_setting_{key}"
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        value = self._settings.get(self._key)
+        return bool(value) if value is not None else None
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._key in self._settings
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._async_set(False)
+
+    async def _async_set(self, value: bool) -> None:
+        await self.coordinator.client.update_settings({self._key: value})
         await self.coordinator.async_request_refresh()

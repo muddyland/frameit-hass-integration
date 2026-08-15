@@ -88,7 +88,7 @@ class FrameITMediaPlayer(FrameITEntity, MediaPlayerEntity):
             return None
         thumb = preview.get("thumb_url", "")
         if thumb.startswith("/"):
-            return f"{self.coordinator.client._base_url}{thumb}"  # noqa: SLF001
+            return f"{self.coordinator.client.base_url}{thumb}"
         return thumb or None
 
     # ------------------------------------------------------------------

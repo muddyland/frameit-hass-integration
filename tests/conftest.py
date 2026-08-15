@@ -32,6 +32,7 @@ MOCK_FRAMES = [
         "agent_url": "http://192.168.1.100:5001",
         "agent_version": "abc123def456",
         "agent_last_seen": "2024-01-01T12:00:00",
+        "agent_auth": "secret",
         "last_seen": "2024-01-01T12:00:00",
         "rotation": 0,
         "interval_seconds": 300,
@@ -52,6 +53,7 @@ MOCK_FRAMES = [
         "agent_url": None,  # no agent registered
         "agent_version": None,
         "agent_last_seen": None,
+        "agent_auth": None,
         "last_seen": "2024-01-01T12:00:00",
         "rotation": 90,
         "interval_seconds": 60,
@@ -124,6 +126,10 @@ MOCK_SETTINGS = {
         "Now in Theaters\nOnly in Theaters\nReserve Your Seats Today\n"
         "Experience the Magic\nComing Soon to Theaters"
     ),
+    # Security posture flags added by the hardened server release.
+    "strict_agent_auth": False,
+    "strict_frame_auth": False,
+    "allow_bypass_frames": False,
 }
 
 MOCK_TRAILERS = [
@@ -136,6 +142,8 @@ MOCK_TRAILERS = [
         "cache_status": "ready",
         "cached_url": "/videos/dQw4w9WgXcQ.mp4",
         "thumb_url": "/videos/dQw4w9WgXcQ.jpg",
+        "download_attempts": 0,
+        "last_error": None,
     },
     {
         "id": 2,
@@ -146,6 +154,8 @@ MOCK_TRAILERS = [
         "cache_status": "pending",
         "cached_url": None,
         "thumb_url": "https://i.ytimg.com/vi/xxxxxxxxxxx/hqdefault.jpg",
+        "download_attempts": 1,
+        "last_error": None,
     },
 ]
 
@@ -178,7 +188,7 @@ def mock_client():
     client.send_command = AsyncMock()
     client.reboot = AsyncMock()
     client.update_frame = AsyncMock()
-    client._base_url = MOCK_URL
+    client.base_url = MOCK_URL
     return client
 
 

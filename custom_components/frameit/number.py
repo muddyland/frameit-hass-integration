@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, MAX_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS
 from .coordinator import FrameITCoordinator
 from .entity import FrameITEntity
 
@@ -28,8 +28,8 @@ class FrameITIntervalNumber(FrameITEntity, NumberEntity):
 
     _attr_name = "Display Interval"
     _attr_icon = "mdi:timer"
-    _attr_native_min_value = 10
-    _attr_native_max_value = 3600
+    _attr_native_min_value = MIN_INTERVAL_SECONDS
+    _attr_native_max_value = MAX_INTERVAL_SECONDS
     _attr_native_step = 1
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_mode = NumberMode.BOX

@@ -8,6 +8,31 @@ from .const import DOMAIN
 from .coordinator import FrameITCoordinator
 
 
+def server_device_info(coordinator: FrameITCoordinator) -> DeviceInfo:
+    """DeviceInfo for the FrameIT server itself, shared by server-wide entities."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
+        name="FrameIT Server",
+        manufacturer="FrameIT",
+        model="FrameIT Server",
+        configuration_url=f"{coordinator.client.base_url}/admin",
+    )
+
+
+class FrameITServerEntity(CoordinatorEntity[FrameITCoordinator]):
+    """Base class for entities that belong to the server rather than a frame."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: FrameITCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_device_info = server_device_info(coordinator)
+
+    @property
+    def _settings(self) -> dict:
+        return (self.coordinator.data or {}).get("settings") or {}
+
+
 class FrameITEntity(CoordinatorEntity[FrameITCoordinator]):
     """Base class for all FrameIT entities.
 
@@ -27,9 +52,7 @@ class FrameITEntity(CoordinatorEntity[FrameITCoordinator]):
             name=frame_name,
             manufacturer="FrameIT",
             model="Raspberry Pi Frame",
-            configuration_url=(
-                f"{coordinator.client._base_url}/admin/frames"  # noqa: SLF001
-            ),
+            configuration_url=f"{coordinator.client.base_url}/admin/frames",
         )
 
     # ------------------------------------------------------------------

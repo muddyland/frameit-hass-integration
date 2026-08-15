@@ -18,8 +18,8 @@ disable =
     missing-function-docstring,
     missing-class-docstring,
 
-    # HA's CoordinatorEntity accesses coordinator internals via _base_url;
-    # single-underscore access is intentional here.
+    # Entities reach into coordinator/manager internals in a few places where
+    # a public accessor would exist only for the one call site.
     protected-access,
 
     # Broad exception catches are intentional in agent-proxy helpers where

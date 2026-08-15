@@ -17,6 +17,27 @@ from tests.conftest import (
     mock_coordinator_data,
 )
 
+
+async def _setup_with(hass, mock_client, data, entry_id):
+    """Set the integration up against a hand-built coordinator payload."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"url": MOCK_URL, "username": MOCK_USERNAME, "password": MOCK_PASSWORD},
+        entry_id=entry_id,
+        title="FrameIT Test",
+    )
+    entry.add_to_hass(hass)
+    with (
+        patch("custom_components.frameit.FrameITApiClient", return_value=mock_client),
+        patch(
+            "custom_components.frameit.coordinator.FrameITCoordinator._async_update_data",
+            return_value=data,
+        ),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    return entry
+
 # ---------------------------------------------------------------------------
 # Fixture
 # ---------------------------------------------------------------------------
@@ -192,3 +213,127 @@ async def test_server_poster_count(hass: HomeAssistant, setup_integration):
 
 async def test_server_trailer_count(hass: HomeAssistant, setup_integration):
     assert hass.states.get("sensor.frameit_server_trailers").state == "2"
+
+
+async def test_server_trailer_error_count(hass: HomeAssistant, setup_integration):
+    """Downloads retry now, so a stuck one is worth counting."""
+    assert hass.states.get("sensor.frameit_server_trailers_failed").state == "0"
+
+
+async def test_server_trailer_error_count_counts_failures(
+    hass: HomeAssistant, mock_client, mock_coordinator_data
+):
+    data = dict(mock_coordinator_data)
+    data["trailers"] = [
+        {**data["trailers"][0], "cache_status": "error", "last_error": "HTTP 403"},
+        data["trailers"][1],
+    ]
+    await _setup_with(hass, mock_client, data, "test_frameit_errors")
+    assert hass.states.get("sensor.frameit_server_trailers_failed").state == "1"
+
+
+# ---------------------------------------------------------------------------
+# Agent credential diagnostics
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_credential_sensor(hass: HomeAssistant, setup_integration):
+    assert hass.states.get("sensor.living_room_agent_credential").state == "secret"
+
+
+async def test_agent_credential_sensor_skipped_without_an_agent(
+    hass: HomeAssistant, setup_integration
+):
+    assert hass.states.get("sensor.bedroom_agent_credential") is None
+
+
+async def test_legacy_agent_count(hass: HomeAssistant, setup_integration):
+    assert (
+        hass.states.get("sensor.frameit_server_agents_on_legacy_credentials").state
+        == "0"
+    )
+
+
+async def test_legacy_agent_count_flags_an_un_updated_agent(
+    hass: HomeAssistant, mock_client, mock_coordinator_data
+):
+    data = dict(mock_coordinator_data)
+    data["frames"] = [
+        {**data["frames"][0], "agent_auth": "legacy"},
+        data["frames"][1],
+    ]
+    await _setup_with(hass, mock_client, data, "test_frameit_legacy")
+    assert (
+        hass.states.get("sensor.frameit_server_agents_on_legacy_credentials").state
+        == "1"
+    )
+
+
+async def test_agent_credential_entities_skipped_on_an_older_server(
+    hass: HomeAssistant, mock_client, mock_coordinator_data
+):
+    """A server that predates agent_auth should get no dead entities."""
+    data = dict(mock_coordinator_data)
+    data["frames"] = [
+        {k: v for k, v in f.items() if k != "agent_auth"} for f in data["frames"]
+    ]
+    await _setup_with(hass, mock_client, data, "test_frameit_old_server")
+    assert hass.states.get("sensor.living_room_agent_credential") is None
+    assert hass.states.get("sensor.frameit_server_agents_on_legacy_credentials") is None
+
+
+# ---------------------------------------------------------------------------
+# Server security switches
+# ---------------------------------------------------------------------------
+
+
+async def test_security_switches_created(hass: HomeAssistant, setup_integration):
+    assert hass.states.get("switch.frameit_server_require_agent_authentication") is not None
+    assert hass.states.get("switch.frameit_server_require_frame_tokens") is not None
+    assert hass.states.get("switch.frameit_server_allow_preview_frames") is not None
+
+
+async def test_security_switch_reflects_the_server_setting(
+    hass: HomeAssistant, setup_integration
+):
+    assert (
+        hass.states.get("switch.frameit_server_require_agent_authentication").state
+        == "off"
+    )
+
+
+async def test_security_switch_turn_on(
+    hass: HomeAssistant, setup_integration, mock_client
+):
+    await hass.services.async_call(
+        "switch",
+        "turn_on",
+        {"entity_id": "switch.frameit_server_require_agent_authentication"},
+        blocking=True,
+    )
+    mock_client.update_settings.assert_awaited_once_with({"strict_agent_auth": True})
+
+
+async def test_security_switch_turn_off(
+    hass: HomeAssistant, setup_integration, mock_client
+):
+    await hass.services.async_call(
+        "switch",
+        "turn_off",
+        {"entity_id": "switch.frameit_server_allow_preview_frames"},
+        blocking=True,
+    )
+    mock_client.update_settings.assert_awaited_once_with({"allow_bypass_frames": False})
+
+
+async def test_security_switches_skipped_on_an_older_server(
+    hass: HomeAssistant, mock_client, mock_coordinator_data
+):
+    data = dict(mock_coordinator_data)
+    data["settings"] = {
+        k: v
+        for k, v in data["settings"].items()
+        if k not in ("strict_agent_auth", "strict_frame_auth", "allow_bypass_frames")
+    }
+    await _setup_with(hass, mock_client, data, "test_frameit_no_security")
+    assert hass.states.get("switch.frameit_server_require_agent_authentication") is None

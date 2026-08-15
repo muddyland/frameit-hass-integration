@@ -4,14 +4,34 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
+from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import FrameITApiClient, FrameITConnectionError
+from .api import (
+    FrameITApiClient,
+    FrameITAuthError,
+    FrameITError,
+    FrameITLockoutError,
+)
 from .const import DOMAIN, UPDATE_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _or_previous(result: Any, previous: dict, key: str, default: Any) -> Any:
+    """Keep the last good value when one leg of the poll fails.
+
+    Zeroing the library on a single hiccup would empty the media browser and
+    make every settings switch unavailable for a cycle, which reads as data
+    loss rather than as the transient it is.
+    """
+    if isinstance(result, BaseException):
+        _LOGGER.debug("FrameIT poll of %s failed: %s", key, result)
+        return previous.get(key, default)
+    return result
 
 
 class FrameITCoordinator(DataUpdateCoordinator):
@@ -27,9 +47,19 @@ class FrameITCoordinator(DataUpdateCoordinator):
         self.client = client
 
     async def _async_update_data(self) -> dict:
+        previous = self.data or {}
+
         try:
             frames = await self.client.get_frames()
-        except FrameITConnectionError as exc:
+        except FrameITLockoutError as exc:
+            # Time-limited and self-clearing — keep polling rather than asking
+            # the user to re-enter a password that is probably correct.
+            raise UpdateFailed(str(exc)) from exc
+        except FrameITAuthError as exc:
+            # Changing the admin password on the server invalidates this
+            # session for good; only new credentials will fix it.
+            raise ConfigEntryAuthFailed(str(exc)) from exc
+        except FrameITError as exc:
             raise UpdateFailed(f"Cannot connect to FrameIT: {exc}") from exc
 
         # Fetch agent info for all frames that have a registered agent,
@@ -48,24 +78,23 @@ class FrameITCoordinator(DataUpdateCoordinator):
         else:
             agent_info = {}
 
-        server_agent_version = await self.client.get_server_agent_version()
-
-        try:
-            posters = await self.client.get_posters()
-            trailers = await self.client.get_trailers()
-            settings = await self.client.get_settings()
-        except Exception:  # pylint: disable=broad-except
-            posters = []
-            trailers = []
-            settings = {}
+        server_version, posters, trailers, settings = await asyncio.gather(
+            self.client.get_server_agent_version(),
+            self.client.get_posters(),
+            self.client.get_trailers(),
+            self.client.get_settings(),
+            return_exceptions=True,
+        )
 
         return {
             "frames": frames,
             "agent_info": agent_info,
-            "server_agent_version": server_agent_version,
-            "posters": posters,
-            "trailers": trailers,
-            "settings": settings,
+            "server_agent_version": _or_previous(
+                server_version, previous, "server_agent_version", None
+            ),
+            "posters": _or_previous(posters, previous, "posters", []),
+            "trailers": _or_previous(trailers, previous, "trailers", []),
+            "settings": _or_previous(settings, previous, "settings", {}),
         }
 
     async def _fetch_agent_info(self, frame_id: int) -> dict:

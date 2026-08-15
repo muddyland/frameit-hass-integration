@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant, callback, Event
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
@@ -101,13 +102,13 @@ class NowPlayingManager:
             except Exception:  # pylint: disable=broad-except
                 pass
         await self._save()
-        try:
-            await self._coordinator.client.update_frame(
-                frame_id, {"content_mode": "pool"}
-            )
-            await self._coordinator.async_request_refresh()
-        except Exception:  # pylint: disable=broad-except
-            pass
+        # Deliberately not swallowed: this runs from a select entity, so a
+        # failure here has somewhere to surface, and a frame left pinned to a
+        # poster that was just deleted should not look like success.
+        await self._coordinator.client.update_frame(
+            frame_id, {"content_mode": "pool"}
+        )
+        await self._coordinator.async_request_refresh()
 
     # ------------------------------------------------------------------
     # Internal
@@ -214,8 +215,6 @@ class NowPlayingManager:
         return None
 
     async def _ha_base_url(self) -> str:
-        from homeassistant.helpers.network import get_url, NoURLAvailableError
-
         try:
             return get_url(
                 self._hass,
