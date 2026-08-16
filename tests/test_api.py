@@ -502,6 +502,23 @@ async def test_upload_poster_names_the_file_for_its_real_format(client):
     assert field[1].get("Content-Type") == "image/png"
 
 
+async def test_upload_poster_is_active(client):
+    """`active` gates display, not just pool membership.
+
+    /next resolves a pin with filter_by(id=..., active=True) and falls back to
+    pool rotation when it misses, so an inactive poster can be pinned to a
+    frame and simply never appear.
+    """
+    session = make_session()
+    with patched(session):
+        await client.login()
+        session.request.side_effect = [make_response(201, {"id": 9})]
+        await client.upload_poster(PNG_BYTES, "now_playing_1.jpg")
+
+    field = form_field(session.request.await_args.kwargs["data"], "active")
+    assert field[2] == "true"
+
+
 async def test_upload_poster_truncates_long_titles(client):
     """want_str() rejects anything past 255 characters with a 400."""
     session = make_session()

@@ -430,8 +430,12 @@ class FrameITApiClient:
                 form.add_field("title_above", title_above[:MAX_TITLE_LENGTH])
             if title_below:
                 form.add_field("title_below", title_below[:MAX_TITLE_LENGTH])
-            # inactive so it doesn't appear in pool rotation or active counts
-            form.add_field("active", "false")
+            # Active, because the server treats `active` as "displayable at
+            # all", not merely "in the pool": /next resolves a pin with
+            # `filter_by(id=..., active=True)` and silently falls back to pool
+            # rotation when that misses. An inactive poster can be pinned and
+            # will simply never appear.
+            form.add_field("active", "true")
             return {"data": form}
 
         return await self._json("POST", "/api/posters/upload", factory=build_form)

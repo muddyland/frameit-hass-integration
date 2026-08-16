@@ -51,6 +51,33 @@ A separate **FrameIT Server** device carries server-wide entities:
 | Require frame tokens | Switch | Server's `strict_frame_auth` flag |
 | Allow preview frames | Switch | Server's `allow_bypass_frames` flag |
 
+## Now-playing mode
+
+Mirrors a media player's artwork onto a frame — point it at an Apple TV and
+the frame shows the poster of whatever is playing.
+
+Two entities have to be set, and **both are required**:
+
+1. **Now Playing Source** (text) — the entity ID of the player to follow,
+   e.g. `media_player.living_room_apple_tv`.
+2. **Content Mode** (select) — set to `now-playing`.
+
+Setting only the content mode does nothing; the integration logs a warning
+saying so. When it is working, each new title downloads that player's artwork,
+uploads it to FrameIT as a poster, and pins it to the frame. The frame's
+banner text becomes the media title and the app name. Switching Content Mode
+back to `pool` or `pinned` removes the artwork and returns the frame to normal.
+
+> **With more than one frame:** the artwork has to be marked active on the
+> server to be displayable at all, and active posters are also pool
+> candidates — so a *different* frame left in `pool` mode may occasionally
+> show it too. Put every frame you don't want doing that into `pinned` mode,
+> or into `now-playing` as well.
+
+If nothing appears, check the Home Assistant log for `custom_components.frameit`
+— every reason the push can bail out (no source, unknown entity, artwork
+download failed, upload rejected) is logged there.
+
 ### Before turning strict mode on
 
 **Require agent authentication** cuts off any agent still presenting the

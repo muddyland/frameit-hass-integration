@@ -55,6 +55,19 @@ class NowPlayingManager:
                 self._subscribe(frame_id, cfg["source"])
 
     @callback
+    def async_resync(self) -> None:
+        """Re-push current artwork for every active frame.
+
+        Runs once the entry is up. A pin can be lost while Home Assistant is
+        not watching — the poster deleted from the library, the frame put back
+        into pool mode from the admin UI — and without this the frame stays
+        wrong until the next track change.
+        """
+        for frame_id, cfg in self._config.items():
+            if cfg.get("active") and cfg.get("source"):
+                self._hass.async_create_task(self._push(frame_id))
+
+    @callback
     def async_stop(self) -> None:
         """Cancel all state listeners (called on entry unload)."""
         for unsub in self._unsubs.values():
@@ -86,9 +99,15 @@ class NowPlayingManager:
         cfg["active"] = True
         await self._save()
         source = cfg.get("source")
-        if source:
-            self._subscribe(frame_id, source)
-            await self._push(frame_id)
+        if not source:
+            _LOGGER.warning(
+                "Frame %s switched to now-playing, but nothing will happen "
+                "until its 'Now Playing Source' names a media player",
+                frame_id,
+            )
+            return
+        self._subscribe(frame_id, source)
+        await self._push(frame_id)
 
     async def disable(self, frame_id: int) -> None:
         """Deactivate now-playing mode and revert the frame to pool."""
@@ -138,18 +157,39 @@ class NowPlayingManager:
             unsub()
 
     async def _push(self, frame_id: int) -> None:
-        """Download artwork from the source player and pin it to the frame."""
+        """Download artwork from the source player and pin it to the frame.
+
+        Every early return here is a reason the frame would show nothing, so
+        each one says so — silence was indistinguishable from a broken pin.
+        """
         cfg = self._config.get(frame_id, {})
         source = cfg.get("source")
         if not source:
+            _LOGGER.warning(
+                "Frame %s is in now-playing mode but no source media player is "
+                "set — fill in its 'Now Playing Source' with a media_player "
+                "entity ID",
+                frame_id,
+            )
             return
 
         state = self._hass.states.get(source)
-        if not state:
+        if state is None:
+            _LOGGER.warning(
+                "Now-playing source %r for frame %s does not exist — check the "
+                "entity ID",
+                source,
+                frame_id,
+            )
             return
 
         entity_picture = state.attributes.get("entity_picture")
         if not entity_picture:
+            _LOGGER.debug(
+                "Now-playing source %s is %s with no artwork; nothing to push",
+                source,
+                state.state,
+            )
             return
 
         image_data = await self._download(entity_picture)
@@ -209,7 +249,11 @@ class NowPlayingManager:
             ) as resp:
                 if resp.status == 200:
                     return await resp.read()
-                _LOGGER.debug("Image download returned HTTP %s for %s", resp.status, url)
+                _LOGGER.warning(
+                    "Could not fetch now-playing artwork: HTTP %s from %s",
+                    resp.status,
+                    url,
+                )
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.warning("Could not download now-playing artwork: %s", exc)
         return None
