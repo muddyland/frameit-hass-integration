@@ -1,33 +1,56 @@
-"""Tests for now-playing mode — manager, select entity, and text entity."""
+"""Tests for now-playing reporting — reporter, per-frame switch, options flow."""
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
-from custom_components.frameit.const import DOMAIN, CONTENT_MODE_NOW_PLAYING
-from custom_components.frameit.now_playing import NowPlayingManager
+from custom_components.frameit.api import FrameITAuthError, FrameITConnectionError
+from custom_components.frameit.const import (
+    CONF_NOW_PLAYING_SOURCE,
+    CONF_NOW_PLAYING_TOKEN,
+    DOMAIN,
+    NOW_PLAYING_STATES,
+)
+from custom_components.frameit.now_playing import NowPlayingReporter, _map_state
 from tests.conftest import (
     MOCK_FRAMES,
     MOCK_PASSWORD,
+    MOCK_SETTINGS,
     MOCK_URL,
     MOCK_USERNAME,
     mock_client,
     mock_coordinator_data,
 )
 
+SOURCE = "media_player.apple_tv"
+TOKEN = "deadbeef" * 8
+
+
 # ---------------------------------------------------------------------------
-# Fixture
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 async def setup_integration(hass: HomeAssistant, mock_client, mock_coordinator_data):
+    """Load the integration with a source player and token configured."""
+    hass.states.async_set(SOURCE, "off", {})
+
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"url": MOCK_URL, "username": MOCK_USERNAME, "password": MOCK_PASSWORD},
+        options={
+            CONF_NOW_PLAYING_SOURCE: SOURCE,
+            CONF_NOW_PLAYING_TOKEN: TOKEN,
+        },
         entry_id="test_frameit_entry",
         title="FrameIT Test",
     )
@@ -46,262 +69,451 @@ async def setup_integration(hass: HomeAssistant, mock_client, mock_coordinator_d
     return entry
 
 
-def _manager(hass, entry_id="test_frameit_entry") -> NowPlayingManager:
+def _reporter(hass, entry_id="test_frameit_entry") -> NowPlayingReporter:
     return hass.data[DOMAIN][entry_id]["now_playing"]
 
 
-# ---------------------------------------------------------------------------
-# Select entity — now-playing option
-# ---------------------------------------------------------------------------
-
-
-async def test_content_mode_includes_now_playing(hass: HomeAssistant, setup_integration):
-    state = hass.states.get("select.living_room_content_mode")
-    assert CONTENT_MODE_NOW_PLAYING in state.attributes["options"]
-
-
-async def test_select_shows_server_mode_by_default(hass: HomeAssistant, setup_integration):
-    # Manager not active → select reflects server mode ("pool")
-    state = hass.states.get("select.living_room_content_mode")
-    assert state.state == "pool"
-
-
-async def test_select_shows_now_playing_when_manager_active(
-    hass: HomeAssistant, setup_integration, mock_coordinator_data
-):
-    mgr = _manager(hass)
-    mgr._config[1] = {"active": True, "source": "media_player.apple_tv"}
-    # Trigger coordinator listeners so entities re-evaluate their properties
-    coordinator = hass.data[DOMAIN]["test_frameit_entry"]["coordinator"]
-    coordinator.async_set_updated_data(mock_coordinator_data)
-    await hass.async_block_till_done()
-    state = hass.states.get("select.living_room_content_mode")
-    assert state.state == CONTENT_MODE_NOW_PLAYING
-
-
-async def test_select_now_playing_calls_enable(
-    hass: HomeAssistant, setup_integration
-):
-    mgr = _manager(hass)
-    mgr.enable = AsyncMock()
-    await hass.services.async_call(
-        "select",
-        "select_option",
-        {"entity_id": "select.living_room_content_mode", "option": "now-playing"},
-        blocking=True,
-    )
-    mgr.enable.assert_awaited_once_with(1)
-
-
-async def test_select_pool_calls_disable_when_now_playing_active(
-    hass: HomeAssistant, setup_integration, mock_client
-):
-    mgr = _manager(hass)
-    mgr._config[1] = {"active": True, "source": "media_player.apple_tv"}
-    mgr.disable = AsyncMock()
-
-    await hass.services.async_call(
-        "select",
-        "select_option",
-        {"entity_id": "select.living_room_content_mode", "option": "pool"},
-        blocking=True,
-    )
-    mgr.disable.assert_awaited_once_with(1)
-
-
-async def test_select_pool_updates_frame_when_not_now_playing(
-    hass: HomeAssistant, setup_integration, mock_client
-):
-    await hass.services.async_call(
-        "select",
-        "select_option",
-        {"entity_id": "select.living_room_content_mode", "option": "pinned"},
-        blocking=True,
-    )
-    mock_client.update_frame.assert_awaited_once_with(1, {"content_mode": "pinned"})
-
-
-# ---------------------------------------------------------------------------
-# Text entity — now-playing source
-# ---------------------------------------------------------------------------
-
-
-async def test_now_playing_source_entity_created(hass: HomeAssistant, setup_integration):
-    assert hass.states.get("text.living_room_now_playing_source") is not None
-    assert hass.states.get("text.bedroom_now_playing_source") is not None
-
-
-async def test_now_playing_source_empty_by_default(hass: HomeAssistant, setup_integration):
-    state = hass.states.get("text.living_room_now_playing_source")
-    assert state.state == ""
-
-
-async def test_now_playing_source_set_value(
-    hass: HomeAssistant, setup_integration
-):
-    mgr = _manager(hass)
-    await hass.services.async_call(
-        "text",
-        "set_value",
-        {
-            "entity_id": "text.living_room_now_playing_source",
-            "value": "media_player.apple_tv",
-        },
-        blocking=True,
-    )
-    assert mgr.get_source(1) == "media_player.apple_tv"
-
-
-async def test_now_playing_source_reflects_manager(
-    hass: HomeAssistant, setup_integration, mock_coordinator_data
-):
-    mgr = _manager(hass)
-    mgr._config[1] = {"source": "media_player.theater_atv", "active": False}
-    coordinator = hass.data[DOMAIN]["test_frameit_entry"]["coordinator"]
-    coordinator.async_set_updated_data(mock_coordinator_data)
-    await hass.async_block_till_done()
-    state = hass.states.get("text.living_room_now_playing_source")
-    assert state.state == "media_player.theater_atv"
-
-
-# ---------------------------------------------------------------------------
-# NowPlayingManager unit tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
-def mgr(hass):
-    """A NowPlayingManager with a mock coordinator."""
+def reporter(hass):
+    """A standalone reporter over a mock coordinator, with options configured."""
     coordinator = MagicMock()
-    coordinator.data = {"frames": MOCK_FRAMES}
+    coordinator.data = {"frames": MOCK_FRAMES, "settings": MOCK_SETTINGS}
     coordinator.client = MagicMock()
-    coordinator.client.upload_poster = AsyncMock(return_value={"id": 99, "url": "/images/np.jpg"})
-    coordinator.client.delete_poster = AsyncMock()
-    coordinator.client.update_frame = AsyncMock()
+    coordinator.client.post_now_playing = AsyncMock(
+        return_value={"ok": True, "state": "playing", "frames_signalled": 1}
+    )
     coordinator.async_request_refresh = AsyncMock()
 
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"url": MOCK_URL, "username": MOCK_USERNAME, "password": MOCK_PASSWORD},
-        entry_id="mgr_test_entry",
+        options={CONF_NOW_PLAYING_SOURCE: SOURCE, CONF_NOW_PLAYING_TOKEN: TOKEN},
+        entry_id="reporter_test_entry",
     )
-    return NowPlayingManager(hass, entry, coordinator)
+    # Registered so tests can change options through the normal API.
+    entry.add_to_hass(hass)
+    return NowPlayingReporter(hass, entry, coordinator)
 
 
-async def test_manager_enable_subscribes_and_pushes(hass: HomeAssistant, mgr):
-    mgr._config[1] = {"source": "media_player.atv", "active": False}
-    mgr._push = AsyncMock()
-    await mgr.enable(1)
-    assert mgr.is_active(1)
-    assert 1 in mgr._unsubs
-    mgr._push.assert_awaited_once_with(1)
-
-
-async def test_manager_disable_cleans_up(hass: HomeAssistant, mgr):
-    mgr._config[1] = {"source": "media_player.atv", "active": True, "poster_id": 42}
-    mgr._subscribe(1, "media_player.atv")
-    assert 1 in mgr._unsubs
-
-    await mgr.disable(1)
-
-    assert not mgr.is_active(1)
-    assert 1 not in mgr._unsubs
-    mgr._coordinator.client.delete_poster.assert_awaited_once_with(42)
-    mgr._coordinator.client.update_frame.assert_awaited_once_with(
-        1, {"content_mode": "pool"}
-    )
-
-
-async def test_manager_push_uploads_and_pins(hass: HomeAssistant, mgr):
-    mgr._config[1] = {"source": "media_player.atv", "active": True}
-
-    # No media_title or app_name — both title fields should be None so the
-    # frame falls back to the cycling banner-text defaults in Settings.
-    hass.states.async_set(
-        "media_player.atv",
-        "playing",
-        {"entity_picture": "https://example.com/artwork.jpg"},
-    )
-
-    with patch.object(mgr, "_download", AsyncMock(return_value=b"fake-image-data")):
-        await mgr._push(1)
-
-    mgr._coordinator.client.upload_poster.assert_awaited_once_with(
-        b"fake-image-data",
-        "now_playing_1.jpg",
-        title_above=None,
-        title_below=None,
-    )
-    mgr._coordinator.client.update_frame.assert_awaited_once_with(
-        1,
-        {"content_mode": "pinned", "pinned_type": "poster", "pinned_id": 99},
-    )
-    assert mgr._config[1]["poster_id"] == 99
-
-
-async def test_manager_push_uses_media_metadata(hass: HomeAssistant, mgr):
-    mgr._config[1] = {"source": "media_player.atv", "active": True}
-
-    hass.states.async_set(
-        "media_player.atv",
-        "playing",
-        {
-            "entity_picture": "https://example.com/artwork.jpg",
-            "media_title": "Inception",
-            "app_name": "Plex",
-        },
-    )
-
-    with patch.object(mgr, "_download", AsyncMock(return_value=b"fake-image-data")):
-        await mgr._push(1)
-
-    mgr._coordinator.client.upload_poster.assert_awaited_once_with(
-        b"fake-image-data",
-        "now_playing_1.jpg",
-        title_above="Inception",
-        title_below="Plex",
-    )
-
-
-async def test_manager_push_skips_when_no_entity_picture(hass: HomeAssistant, mgr):
-    mgr._config[1] = {"source": "media_player.atv", "active": True}
-    hass.states.async_set("media_player.atv", "playing", {})
-
-    await mgr._push(1)
-
-    mgr._coordinator.client.upload_poster.assert_not_awaited()
-
-
-async def test_manager_push_skips_when_source_missing(hass: HomeAssistant, mgr):
-    mgr._config[1] = {"source": "media_player.nonexistent", "active": True}
-    await mgr._push(1)
-    mgr._coordinator.client.upload_poster.assert_not_awaited()
-
-
-async def test_manager_push_deletes_old_poster_first(hass: HomeAssistant, mgr):
-    mgr._config[1] = {
-        "source": "media_player.atv",
-        "active": True,
-        "poster_id": 77,
+def _playing(hass, **overrides):
+    attrs = {
+        "entity_picture": "https://example.com/cover.jpg",
+        "media_title": "Bohemian Rhapsody",
+        "media_artist": "Queen",
+        "media_album_name": "A Night at the Opera",
+        "media_content_id": "track-1",
     }
-    hass.states.async_set(
-        "media_player.atv", "playing", {"entity_picture": "https://example.com/art.jpg"}
+    attrs.update(overrides)
+    hass.states.async_set(SOURCE, "playing", attrs)
+
+
+# ---------------------------------------------------------------------------
+# State mapping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("ha_state", "expected"),
+    [
+        ("playing", "playing"),
+        ("paused", "paused"),
+        ("idle", "idle"),
+        ("off", "off"),
+        ("standby", "idle"),
+        ("buffering", "idle"),
+        ("unavailable", "off"),
+        ("unknown", "off"),
+        (None, "off"),
+    ],
+)
+def test_map_state(ha_state, expected):
+    assert _map_state(ha_state) == expected
+
+
+@pytest.mark.parametrize(
+    "ha_state",
+    ["playing", "paused", "idle", "off", "standby", "buffering", "on", "", "weird"],
+)
+def test_map_state_only_emits_states_the_server_accepts(ha_state):
+    """The webhook 400s on anything outside its four values."""
+    assert _map_state(ha_state) in NOW_PLAYING_STATES
+
+
+# ---------------------------------------------------------------------------
+# Reporting and dedup
+# ---------------------------------------------------------------------------
+
+
+async def test_report_posts_state_and_metadata(hass: HomeAssistant, reporter):
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"\xff\xd8\xffart")):
+        await reporter.async_report()
+
+    reporter._coordinator.client.post_now_playing.assert_awaited_once_with(
+        TOKEN,
+        "playing",
+        title="Bohemian Rhapsody",
+        artist="Queen",
+        album="A Night at the Opera",
+        entity_id=SOURCE,
+        image=b"\xff\xd8\xffart",
     )
 
-    with patch.object(mgr, "_download", AsyncMock(return_value=b"img")):
-        await mgr._push(1)
 
-    mgr._coordinator.client.delete_poster.assert_awaited_once_with(77)
+async def test_report_does_nothing_without_token(hass: HomeAssistant, reporter):
+    hass.config_entries.async_update_entry(
+        reporter._entry, options={CONF_NOW_PLAYING_SOURCE: SOURCE}
+    )
+    _playing(hass)
+    await reporter.async_report()
+    reporter._coordinator.client.post_now_playing.assert_not_awaited()
 
 
-async def test_manager_set_source_updates_config(hass: HomeAssistant, mgr):
-    await mgr.set_source(1, "media_player.atv")
-    assert mgr.get_source(1) == "media_player.atv"
+async def test_report_does_nothing_without_source(hass: HomeAssistant, reporter):
+    hass.config_entries.async_update_entry(
+        reporter._entry, options={CONF_NOW_PLAYING_TOKEN: TOKEN}
+    )
+    _playing(hass)
+    await reporter.async_report()
+    reporter._coordinator.client.post_now_playing.assert_not_awaited()
 
 
-async def test_manager_stop_removes_all_listeners(hass: HomeAssistant, mgr):
-    mgr._config[1] = {"source": "media_player.atv", "active": True}
-    mgr._subscribe(1, "media_player.atv")
-    assert 1 in mgr._unsubs
-    mgr.async_stop()
-    assert not mgr._unsubs
+async def test_position_tick_does_not_repost(hass: HomeAssistant, reporter):
+    """The whole point of the fingerprint: position updates are not track changes."""
+    _playing(hass, media_position=10)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+    assert reporter._coordinator.client.post_now_playing.await_count == 1
+
+    for position in (11, 12, 13, 14):
+        _playing(hass, media_position=position, media_position_updated_at="now")
+        await reporter.async_report()
+
+    assert reporter._coordinator.client.post_now_playing.await_count == 1
+
+
+async def test_track_change_reposts(hass: HomeAssistant, reporter):
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art1")):
+        await reporter.async_report()
+        _playing(
+            hass,
+            media_title="Under Pressure",
+            media_content_id="track-2",
+            entity_picture="https://example.com/cover2.jpg",
+        )
+        await reporter.async_report()
+
+    assert reporter._coordinator.client.post_now_playing.await_count == 2
+    second = reporter._coordinator.client.post_now_playing.await_args_list[1]
+    assert second.args[1] == "playing"
+    assert second.kwargs["title"] == "Under Pressure"
+
+
+async def test_pause_reposts_without_refetching_art(hass: HomeAssistant, reporter):
+    """Same track, new state: the server already holds the image."""
+    _playing(hass)
+    download = AsyncMock(return_value=b"art")
+    with patch.object(reporter, "_download", download):
+        await reporter.async_report()
+        hass.states.async_set(
+            SOURCE, "paused", dict(hass.states.get(SOURCE).attributes)
+        )
+        await reporter.async_report()
+
+    assert download.await_count == 1
+    second = reporter._coordinator.client.post_now_playing.await_args_list[1]
+    assert second.args[1] == "paused"
+    assert second.kwargs["image"] is None
+
+
+async def test_stopping_reports_off_without_image(hass: HomeAssistant, reporter):
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+    hass.states.async_set(SOURCE, "off", {})
+    await reporter.async_report()
+
+    last = reporter._coordinator.client.post_now_playing.await_args_list[-1]
+    assert last.args[1] == "off"
+    assert last.kwargs["image"] is None
+
+
+async def test_failed_download_still_reports_state(hass: HomeAssistant, reporter):
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=None)):
+        await reporter.async_report()
+
+    call = reporter._coordinator.client.post_now_playing.await_args
+    assert call.args[1] == "playing"
+    assert call.kwargs["image"] is None
+    # The art was never delivered, so the next attempt must try again.
+    assert reporter._last_picture is None
+
+
+async def test_failed_download_retries_on_next_report(hass: HomeAssistant, reporter):
+    _playing(hass)
+    download = AsyncMock(side_effect=[None, b"art"])
+    with patch.object(reporter, "_download", download):
+        await reporter.async_report()
+        await reporter.async_report(force=True)
+
+    assert download.await_count == 2
+
+
+async def test_connection_error_is_swallowed_and_retried(hass: HomeAssistant, reporter):
+    _playing(hass)
+    reporter._coordinator.client.post_now_playing = AsyncMock(
+        side_effect=FrameITConnectionError("boom")
+    )
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+        # Fingerprint was not committed, so the same state posts again.
+        await reporter.async_report()
+
+    assert reporter._coordinator.client.post_now_playing.await_count == 2
+
+
+async def test_auth_error_stops_further_posts(hass: HomeAssistant, reporter):
+    """A bad token will not fix itself; don't hammer the endpoint."""
+    _playing(hass)
+    reporter._coordinator.client.post_now_playing = AsyncMock(
+        side_effect=FrameITAuthError("nope")
+    )
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+        hass.states.async_set(SOURCE, "paused", {})
+        await reporter.async_report()
+
+    assert reporter._coordinator.client.post_now_playing.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_is_inside_the_stale_window(hass: HomeAssistant, reporter):
+    assert reporter.stale_seconds == 120
+    assert reporter.heartbeat_seconds == 60
+    assert reporter.heartbeat_seconds < reporter.stale_seconds
+
+
+def test_heartbeat_follows_server_stale_setting(hass: HomeAssistant, reporter):
+    reporter._coordinator.data = {"settings": {"now_playing_stale_seconds": 30}}
+    assert reporter.heartbeat_seconds == 15
+
+
+def test_heartbeat_falls_back_when_setting_missing(hass: HomeAssistant, reporter):
+    reporter._coordinator.data = {"settings": {}}
+    assert reporter.stale_seconds == 120
+    reporter._coordinator.data = {"settings": {"now_playing_stale_seconds": "junk"}}
+    assert reporter.stale_seconds == 120
+    reporter._coordinator.data = {"settings": {"now_playing_stale_seconds": 0}}
+    assert reporter.stale_seconds == 120
+
+
+def test_heartbeat_has_a_floor(hass: HomeAssistant, reporter):
+    reporter._coordinator.data = {"settings": {"now_playing_stale_seconds": 1}}
+    assert reporter.heartbeat_seconds == 5
+
+
+async def test_heartbeat_reposts_while_playing(hass: HomeAssistant, reporter):
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_start()
+        assert reporter._coordinator.client.post_now_playing.await_count == 1
+
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
+        await hass.async_block_till_done()
+
+    assert reporter._coordinator.client.post_now_playing.await_count == 2
+    reporter.async_stop()
+
+
+async def test_heartbeat_silent_when_nothing_is_playing(hass: HomeAssistant, reporter):
+    hass.states.async_set(SOURCE, "off", {})
+    await reporter.async_start()
+    assert reporter._coordinator.client.post_now_playing.await_count == 1
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
+    await hass.async_block_till_done()
+
+    assert reporter._coordinator.client.post_now_playing.await_count == 1
+    reporter.async_stop()
+
+
+async def test_stop_cancels_listener_and_heartbeat(hass: HomeAssistant, reporter):
+    await reporter.async_start()
+    assert reporter._unsub_state is not None
+    assert reporter._unsub_heartbeat is not None
+    reporter.async_stop()
+    assert reporter._unsub_state is None
+    assert reporter._unsub_heartbeat is None
+
+
+async def test_start_is_inert_when_unconfigured(hass: HomeAssistant, reporter):
+    hass.config_entries.async_update_entry(reporter._entry, options={})
+    await reporter.async_start()
+    assert reporter._unsub_state is None
+    reporter._coordinator.client.post_now_playing.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Live wiring through the integration
+# ---------------------------------------------------------------------------
+
+
+async def test_state_change_triggers_a_post(
+    hass: HomeAssistant, setup_integration, mock_client
+):
+    mock_client.post_now_playing.reset_mock()
+    with patch.object(
+        _reporter(hass), "_download", AsyncMock(return_value=b"art")
+    ):
+        _playing(hass)
+        await hass.async_block_till_done()
+
+    assert mock_client.post_now_playing.await_count == 1
+    assert mock_client.post_now_playing.await_args.args[1] == "playing"
+
+
+# ---------------------------------------------------------------------------
+# Per-frame Now Playing switch
+# ---------------------------------------------------------------------------
+
+
+async def test_now_playing_switch_created_for_every_frame(
+    hass: HomeAssistant, setup_integration
+):
+    assert hass.states.get("switch.living_room_now_playing") is not None
+    # Bedroom has no agent, but the opt-in is a server flag, not an agent one.
+    assert hass.states.get("switch.bedroom_now_playing") is not None
+
+
+async def test_now_playing_switch_reflects_server_flag(
+    hass: HomeAssistant, setup_integration
+):
+    assert hass.states.get("switch.living_room_now_playing").state == "off"
+    assert hass.states.get("switch.bedroom_now_playing").state == "on"
+
+
+async def test_now_playing_switch_turn_on(
+    hass: HomeAssistant, setup_integration, mock_client
+):
+    await hass.services.async_call(
+        "switch",
+        "turn_on",
+        {"entity_id": "switch.living_room_now_playing"},
+        blocking=True,
+    )
+    mock_client.update_frame.assert_awaited_once_with(1, {"show_now_playing": True})
+
+
+async def test_now_playing_switch_turn_off(
+    hass: HomeAssistant, setup_integration, mock_client
+):
+    await hass.services.async_call(
+        "switch",
+        "turn_off",
+        {"entity_id": "switch.bedroom_now_playing"},
+        blocking=True,
+    )
+    mock_client.update_frame.assert_awaited_once_with(2, {"show_now_playing": False})
+
+
+# ---------------------------------------------------------------------------
+# Removed in 2.0.0
+# ---------------------------------------------------------------------------
+
+
+async def test_now_playing_source_text_entity_is_gone(
+    hass: HomeAssistant, setup_integration
+):
+    assert hass.states.get("text.living_room_now_playing_source") is None
+
+
+async def test_content_mode_no_longer_offers_now_playing(
+    hass: HomeAssistant, setup_integration
+):
+    state = hass.states.get("select.living_room_content_mode")
+    assert set(state.attributes["options"]) == {"pool", "pinned"}
+
+
+# ---------------------------------------------------------------------------
+# Artwork download
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, status: int, body: bytes = b"") -> None:
+        self.status = status
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def read(self) -> bytes:
+        return self._body
+
+
+def _patch_session(response):
+    session = MagicMock()
+    session.get = MagicMock(return_value=response)
+    return patch(
+        "custom_components.frameit.now_playing.async_get_clientsession",
+        return_value=session,
+    ), session
+
+
+async def test_download_absolute_url(hass: HomeAssistant, reporter):
+    patcher, session = _patch_session(_FakeResponse(200, b"\xff\xd8\xffjpeg"))
+    with patcher:
+        data = await reporter._download("https://example.com/cover.jpg")
+
+    assert data == b"\xff\xd8\xffjpeg"
+    assert session.get.call_args.args[0] == "https://example.com/cover.jpg"
+
+
+async def test_download_resolves_relative_proxy_url(hass: HomeAssistant, reporter):
+    """entity_picture is usually an HA-relative /api/media_player_proxy path."""
+    patcher, session = _patch_session(_FakeResponse(200, b"art"))
+    with (
+        patcher,
+        patch.object(reporter, "_ha_base_url", return_value="http://ha.local:8123"),
+    ):
+        data = await reporter._download("/api/media_player_proxy/media_player.atv")
+
+    assert data == b"art"
+    assert session.get.call_args.args[0] == (
+        "http://ha.local:8123/api/media_player_proxy/media_player.atv"
+    )
+
+
+async def test_download_returns_none_on_http_error(hass: HomeAssistant, reporter):
+    patcher, _session = _patch_session(_FakeResponse(404))
+    with patcher:
+        assert await reporter._download("https://example.com/missing.jpg") is None
+
+
+async def test_download_returns_none_on_exception(hass: HomeAssistant, reporter):
+    session = MagicMock()
+    session.get = MagicMock(side_effect=RuntimeError("boom"))
+    with patch(
+        "custom_components.frameit.now_playing.async_get_clientsession",
+        return_value=session,
+    ):
+        assert await reporter._download("https://example.com/cover.jpg") is None
+
+
+async def test_ha_base_url_falls_back_when_unavailable(hass: HomeAssistant, reporter):
+    from homeassistant.helpers.network import NoURLAvailableError
+
+    with patch(
+        "custom_components.frameit.now_playing.get_url",
+        side_effect=NoURLAvailableError,
+    ):
+        assert reporter._ha_base_url() == "http://localhost:8123"

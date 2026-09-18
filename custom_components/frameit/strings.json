@@ -24,5 +24,26 @@
     "abort": {
       "already_configured": "This FrameIT server is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Now Playing",
+        "description": "Mirror a media player to any frame with its Now Playing switch turned on. The token authenticates Home Assistant to the FrameIT now-playing webhook; the server shows it only once, when it is generated.",
+        "data": {
+          "now_playing_source": "Media player",
+          "now_playing_token": "Webhook token",
+          "generate_token": "Generate a new token"
+        },
+        "data_description": {
+          "now_playing_source": "The player whose artwork and track details are sent to FrameIT. Leave blank to turn now-playing reporting off.",
+          "now_playing_token": "Paste an existing token, or tick the box below to have FrameIT generate one.",
+          "generate_token": "Mints a fresh token on the server and stores it here. This invalidates any token already in use."
+        }
+      }
+    },
+    "error": {
+      "token_failed": "FrameIT could not generate a token. Check that the server is reachable and try again."
+    }
   }
 }

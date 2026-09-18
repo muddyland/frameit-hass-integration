@@ -17,6 +17,53 @@ class FrameITConnectionError(Exception):
     """Raised when the server cannot be reached."""
 
 
+def _sniff_image(data: bytes) -> tuple[str, str]:
+    """Return (extension, mime) for image bytes.
+
+    The server sniffs magic bytes and ignores the filename, but sending a
+    content type that matches the payload keeps the request honest and makes
+    a rejected upload easy to read in a packet capture.
+    """
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg", "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png", "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    # Unknown: send it anyway and let the server's 400 be the authority.
+    return "img", "application/octet-stream"
+
+
+def _now_playing_form(
+    state: str,
+    *,
+    title: str | None,
+    artist: str | None,
+    album: str | None,
+    entity_id: str | None,
+    image: bytes | None,
+) -> aiohttp.FormData:
+    """Build the multipart body for /api/now-playing.
+
+    Empty metadata fields are omitted rather than sent blank, so the server
+    stores None and a frame falls back to its own defaults.
+    """
+    form = aiohttp.FormData()
+    form.add_field("state", state)
+    for name, value in (
+        ("title", title),
+        ("artist", artist),
+        ("album", album),
+        ("entity_id", entity_id),
+    ):
+        if value:
+            form.add_field(name, value)
+    if image:
+        ext, mime = _sniff_image(image)
+        form.add_field("image", image, filename=f"cover.{ext}", content_type=mime)
+    return form
+
+
 class FrameITApiClient:
     """Async HTTP client for FrameIT.
 
@@ -196,25 +243,6 @@ class FrameITApiClient:
         resp = await self._request("GET", "/api/trailers")
         return await resp.json()
 
-    async def upload_poster(
-        self,
-        image_data: bytes,
-        filename: str,
-        title_above: str | None = None,
-        title_below: str | None = None,
-    ) -> dict:
-        """Upload image bytes as a new poster. Returns the created poster dict."""
-        form = aiohttp.FormData()
-        form.add_field("file", image_data, filename=filename, content_type="image/jpeg")
-        if title_above:
-            form.add_field("title_above", title_above)
-        if title_below:
-            form.add_field("title_below", title_below)
-        # inactive so it doesn't appear in pool rotation or active counts
-        form.add_field("active", "false")
-        resp = await self._request("POST", "/api/posters/upload", data=form)
-        return await resp.json()
-
     async def delete_poster(self, poster_id: int) -> None:
         await self._request("DELETE", f"/api/posters/{poster_id}")
 
@@ -230,6 +258,73 @@ class FrameITApiClient:
     async def update_settings(self, data: dict) -> dict:
         """Patch global settings; returns the updated settings dict."""
         resp = await self._request("PATCH", "/api/settings", json=data)
+        return await resp.json()
+
+    # ------------------------------------------------------------------
+    # Now playing
+    # ------------------------------------------------------------------
+
+    async def create_now_playing_token(self) -> str | None:
+        """Mint a new webhook token. The server returns it exactly once.
+
+        Minting invalidates whatever token was there before, so this is only
+        called when the user explicitly asks for one in the options flow.
+        """
+        resp = await self._request("POST", "/api/settings/now-playing-token")
+        if resp.status != 200:
+            return None
+        data = await resp.json()
+        return data.get("token")
+
+    async def post_now_playing(
+        self,
+        token: str,
+        state: str,
+        *,
+        title: str | None = None,
+        artist: str | None = None,
+        album: str | None = None,
+        entity_id: str | None = None,
+        image: bytes | None = None,
+    ) -> dict:
+        """POST the current media state to the now-playing webhook.
+
+        This endpoint authenticates with a bearer token rather than the admin
+        session, so it deliberately bypasses ``_request``: a 401 here means a
+        wrong token, and re-running the cookie login would neither fix it nor
+        be worth the round trip.
+        """
+        session = self._ensure_session()
+        form = _now_playing_form(
+            state,
+            title=title,
+            artist=artist,
+            album=album,
+            entity_id=entity_id,
+            image=image,
+        )
+
+        try:
+            resp = await session.post(
+                f"{self._base_url}/api/now-playing",
+                data=form,
+                headers={"Authorization": f"Bearer {token}"},
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=15),
+            )
+        except aiohttp.ClientError as exc:
+            raise FrameITConnectionError(str(exc)) from exc
+
+        if resp.status == 401:
+            raise FrameITAuthError(
+                "FrameIT rejected the now-playing token. Generate a new one in "
+                "the integration options."
+            )
+        if resp.status != 200:
+            body = await resp.text()
+            raise FrameITConnectionError(
+                f"now-playing webhook returned HTTP {resp.status}: {body[:200]}"
+            )
         return await resp.json()
 
     # ------------------------------------------------------------------

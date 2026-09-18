@@ -15,6 +15,7 @@ the following entities:
 | Refresh | Button | Reload the frame's browser |
 | Reboot | Button | Reboot the Raspberry Pi (requires agent) |
 | Content Mode | Select | Switch between `pool` and `pinned` mode |
+| Now Playing | Switch | Show album art from the now-playing source on this frame |
 | CPU | Sensor | CPU usage % (requires agent) |
 | RAM | Sensor | RAM usage % (requires agent) |
 | Disk | Sensor | Disk usage % (requires agent) |
@@ -22,7 +23,50 @@ the following entities:
 
 > **"Requires agent"** means the FrameIT agent must be installed and registered
 > on the Raspberry Pi. Frames accessed only via the browser (no agent) still
-> get Next, Refresh, and Content Mode.
+> get Next, Refresh, Content Mode, and Now Playing.
+
+## Now playing
+
+The integration can mirror what a media player is playing onto your frames:
+Home Assistant posts the state, track details and album art to the FrameIT
+server, and the server shows it on every frame whose **Now Playing** switch is
+on. One source player feeds all of them.
+
+To set it up:
+
+1. On the FrameIT server, **Settings → Now Playing**, or via the integration:
+   **Settings → Devices & Services → FrameIT → Configure**, tick
+   **Generate a new token** and submit. The token is stored in the config
+   entry — the server shows it only once, so generating a new one invalidates
+   whatever was in use before.
+2. In the same options dialog, choose the **Media player** to mirror.
+3. Turn on the **Now Playing** switch for each frame that should show it.
+
+Leaving the media player blank turns reporting off.
+
+Two details worth knowing:
+
+- Nothing is re-sent for a position tick — only an actual state or track change
+  posts, so a playing track does not hammer the server.
+- While something is playing the integration re-posts on a heartbeat at half
+  the server's `now_playing_stale_seconds` (120 s by default, so every 60 s).
+  The server treats art older than that window as cleared, which is what makes
+  a frame fall back to its normal rotation when Home Assistant stops reporting.
+
+## Upgrading from 1.x
+
+Version 2.0.0 is a breaking change. In 1.x the integration faked now-playing by
+uploading album art as a poster and pinning it to a frame. The server now owns
+this properly, so:
+
+- The **now-playing** option is gone from the Content Mode select. Content
+  Mode is `pool` or `pinned`, matching the server. Any automation selecting
+  `now-playing` needs updating to the Now Playing switch instead.
+- The per-frame **Now Playing Source** text entities are gone. The source is
+  now one media player set in the integration options, and the token is stored
+  there too rather than in an entity anyone can read off a dashboard.
+- On first start, the posters 1.x left behind in your library are deleted
+  automatically.
 
 ## Installation
 
