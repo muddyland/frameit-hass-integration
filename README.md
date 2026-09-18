@@ -15,7 +15,7 @@ the following entities:
 | Refresh | Button | Reload the frame's browser |
 | Reboot | Button | Reboot the Raspberry Pi (requires agent) |
 | Content Mode | Select | Switch between `pool` and `pinned` mode |
-| Now Playing | Switch | Show album art from the now-playing source on this frame |
+| Now Playing | Switch | Show what the now-playing source is playing on this frame |
 | CPU | Sensor | CPU usage % (requires agent) |
 | RAM | Sensor | RAM usage % (requires agent) |
 | Disk | Sensor | Disk usage % (requires agent) |
@@ -28,9 +28,29 @@ the following entities:
 ## Now playing
 
 The integration can mirror what a media player is playing onto your frames:
-Home Assistant posts the state, track details and album art to the FrameIT
-server, and the server shows it on every frame whose **Now Playing** switch is
-on. One source player feeds all of them.
+Home Assistant posts the state, the artwork and two lines of caption to the
+FrameIT server, and the server shows it on every frame whose **Now Playing**
+switch is on. One source player feeds all of them.
+
+Films and television are the main case; music works too.
+
+| Playing | Top banner | Bottom banner |
+|---------|------------|---------------|
+| A television episode | The **series** name | The app it is streaming from |
+| A film | The film title | The app it is streaming from |
+| A track | The track title | The artist, or the album |
+| Anything else | Whatever title the player reports | *(blank)* |
+
+Episode numbers are deliberately left off: a frame showing *Breaking Bad*
+right through a run of episodes reads better than one that changes to
+*S05E14* every forty minutes. The bottom banner is blank when the player does
+not report an `app_name`, which is common for local libraries.
+
+Which line you get depends on what your player actually publishes, and players
+vary a lot. A series name is used whenever `media_series_title` is set. Some
+streaming apps — Netflix through an Apple TV, for instance — publish only a
+plain title with no series fields at all; that title is then shown as-is
+rather than being taken apart to guess a series name out of it.
 
 To set it up:
 
@@ -46,8 +66,10 @@ Leaving the media player blank turns reporting off.
 
 Two details worth knowing:
 
-- Nothing is re-sent for a position tick — only an actual state or track change
-  posts, so a playing track does not hammer the server.
+- Nothing is re-sent for a position tick — only an actual state or metadata
+  change posts, so playing something does not hammer the server. A new episode
+  of the same series does count as a change, even though the banners read the
+  same, because the artwork behind them is different.
 - While something is playing the integration re-posts on a heartbeat at half
   the server's `now_playing_stale_seconds` (120 s by default, so every 60 s).
   The server treats art older than that window as cleared, which is what makes

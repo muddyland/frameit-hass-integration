@@ -5,7 +5,13 @@ every frame that has opted in via ``show_now_playing``. Home Assistant's only
 job is to keep that state fresh, so this module watches one media_player and
 POSTs to ``/api/now-playing``.
 
-Two things make that more than a state listener:
+Three things make that more than a state listener:
+
+* The server stores three text fields, named ``title``/``artist``/``album``
+  after the music case it was first built for, and a frame renders the first
+  on the top banner and the other two on the bottom. Films and television are
+  the common case here, so :func:`_describe` decides what belongs on those two
+  lines for video as well as for music.
 
 * A player emits a state_changed event on every position tick. Re-posting on
   each of those would hammer the server and rewrite the album art file several
@@ -19,7 +25,9 @@ Two things make that more than a state listener:
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import timedelta
+from typing import Any
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -36,6 +44,9 @@ from .const import (
     NOW_PLAYING_DEFAULT_STALE_SECONDS,
     NOW_PLAYING_HEARTBEAT_RATIO,
     NOW_PLAYING_MIN_HEARTBEAT_SECONDS,
+    NOW_PLAYING_MUSIC_CONTENT_TYPE,
+    NOW_PLAYING_TV_CONTENT_TYPES,
+    NOW_PLAYING_VIDEO_CONTENT_TYPES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,6 +68,61 @@ def _map_state(ha_state: str | None) -> str:
     # standby, idle, buffering and anything a custom integration invents all
     # mean "there is no artwork to show right now".
     return "idle"
+
+
+def _text(value: Any) -> str | None:
+    """Normalise an attribute to a non-blank string, or None."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _describe(attrs: Mapping[str, Any]) -> dict[str, str | None]:
+    """Map media_player attributes onto the three text fields the server stores.
+
+    The server keeps ``title``, ``artist`` and ``album`` and a frame renders
+    ``title`` in the top banner and ``artist or album`` in the bottom one. The
+    names are historical — they are really just "top line" and "bottom line" —
+    so video content reuses them rather than needing new server fields:
+
+    * **TV** — a series title, or a content type that says episode. The top
+      line is the *series name*, deliberately without a season or episode
+      number, so consecutive episodes read as one continuous thing on the
+      wall. The bottom line is the app the show is coming from.
+    * **Film** — a movie or video content type with no series title. Title on
+      top, app name underneath.
+    * **Music** — unchanged from the original music-only mapping: track,
+      artist, album.
+    * **Anything else** — the title on its own. Nothing is inferred.
+
+    The order matters. A series title beats everything, because that is the
+    one attribute that is never ambiguous. Content type is consulted next, and
+    ``media_artist`` only decides the case when nothing before it matched —
+    some video players populate it with a director or a channel.
+
+    Nothing here invents metadata. An episode streamed through an app that
+    only publishes ``media_title`` and ``media_content_type: video`` (Netflix
+    on an Apple TV, among others) is reported as exactly that title: no series
+    name reconstructed out of it, and no season or episode guessed.
+    """
+    series = _text(attrs.get("media_series_title"))
+    title = _text(attrs.get("media_title"))
+    artist = _text(attrs.get("media_artist"))
+    album = _text(attrs.get("media_album_name"))
+    app = _text(attrs.get("app_name"))
+    content_type = (_text(attrs.get("media_content_type")) or "").lower()
+
+    if series or content_type in NOW_PLAYING_TV_CONTENT_TYPES:
+        return {"title": series or title, "artist": app, "album": None}
+
+    if content_type in NOW_PLAYING_VIDEO_CONTENT_TYPES:
+        return {"title": title, "artist": app, "album": None}
+
+    if content_type == NOW_PLAYING_MUSIC_CONTENT_TYPE or artist:
+        return {"title": title, "artist": artist, "album": album}
+
+    return {"title": title, "artist": None, "album": None}
 
 
 class NowPlayingReporter:
@@ -208,6 +274,12 @@ class NowPlayingReporter:
         Everything else a media player publishes — position, volume, shuffle —
         is deliberately excluded so a position tick does not look like a track
         change.
+
+        The raw attributes are fingerprinted rather than the banner text
+        _describe derives from them. Two consecutive episodes of the same show
+        on the same app produce identical banners by design, and that must
+        still count as a change: the artwork behind them is different, and the
+        server would otherwise keep showing the previous episode's still.
         """
         attrs = state.attributes if state else {}
         return (
@@ -215,6 +287,11 @@ class NowPlayingReporter:
             attrs.get("media_title"),
             attrs.get("media_artist"),
             attrs.get("media_album_name"),
+            attrs.get("media_series_title"),
+            attrs.get("media_season"),
+            attrs.get("media_episode"),
+            attrs.get("media_content_type"),
+            attrs.get("app_name"),
             attrs.get("media_content_id"),
             attrs.get("entity_picture"),
         )
@@ -245,13 +322,15 @@ class NowPlayingReporter:
                     # download rather than assuming the server has the art.
                     _LOGGER.debug("Reporting now-playing without artwork for %s", source)
 
+        described = _describe(attrs)
+
         try:
             await self._coordinator.client.post_now_playing(
                 self.token,
                 mapped,
-                title=attrs.get("media_title"),
-                artist=attrs.get("media_artist"),
-                album=attrs.get("media_album_name"),
+                title=described["title"],
+                artist=described["artist"],
+                album=described["album"],
                 entity_id=source,
                 image=image,
             )
