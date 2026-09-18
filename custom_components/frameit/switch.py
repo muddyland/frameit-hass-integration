@@ -1,4 +1,4 @@
-"""Switch platform for FrameIT — display on/off and service control."""
+"""Switch platform for FrameIT — now-playing opt-in, display on/off, services."""
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
@@ -24,12 +24,52 @@ async def async_setup_entry(
 
     entities: list[SwitchEntity] = []
     for frame in coordinator.data.get("frames", []):
+        # Now-playing opt-in is a server-side flag, so it exists for every
+        # frame whether or not an agent has registered.
+        entities.append(FrameITNowPlayingSwitch(coordinator, frame))
         if frame.get("agent_url"):
             entities.append(FrameITDisplaySwitch(coordinator, frame))
             for svc in _SERVICE_META:
                 entities.append(FrameITServiceSwitch(coordinator, frame, svc))
 
     async_add_entities(entities)
+
+
+class FrameITNowPlayingSwitch(FrameITEntity, SwitchEntity):
+    """Opts a frame in to the server's now-playing overlay.
+
+    The server holds one now-playing state and fans it out to every frame with
+    ``show_now_playing`` set, so this switch is per-frame while the artwork
+    itself is global.
+    """
+
+    _attr_name = "Now Playing"
+    _attr_icon = "mdi:television-play"
+
+    def __init__(self, coordinator: FrameITCoordinator, frame: dict) -> None:
+        super().__init__(coordinator, frame)
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_{frame['id']}_show_now_playing"
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        frame = self._frame
+        if frame is None:
+            return None
+        return bool(frame.get("show_now_playing"))
+
+    async def _async_set(self, value: bool) -> None:
+        await self.coordinator.client.update_frame(
+            self._frame_id, {"show_now_playing": value}
+        )
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._async_set(False)
 
 
 class FrameITDisplaySwitch(FrameITEntity, SwitchEntity):

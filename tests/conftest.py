@@ -36,6 +36,7 @@ MOCK_FRAMES = [
         "rotation": 0,
         "interval_seconds": 300,
         "content_mode": "pool",
+        "show_now_playing": False,
         "pinned_type": None,
         "pinned_id": None,
         "preview": {
@@ -56,6 +57,7 @@ MOCK_FRAMES = [
         "rotation": 90,
         "interval_seconds": 60,
         "content_mode": "pinned",
+        "show_now_playing": True,
         "pinned_type": "poster",
         "pinned_id": 3,
         "preview": None,
@@ -116,6 +118,8 @@ MOCK_SETTINGS = {
     "trailer_weight_percent": None,
     "dashboard_refresh_seconds": 30,
     "log_retention_days": None,
+    "now_playing_token_set": True,
+    "now_playing_stale_seconds": 120,
     "default_title_above_options": (
         "Now Playing\nComing Soon\nNow in Theaters\n"
         "Get Your Tickets\nFeature Presentation\nNow Showing"
@@ -172,8 +176,11 @@ def mock_client():
     client.update_settings = AsyncMock(return_value=MOCK_SETTINGS)
     client.trigger_agent_update = AsyncMock()
     client.restart_service = AsyncMock()
-    client.upload_poster = AsyncMock(return_value={"id": 99, "url": "/images/now_playing_1.jpg"})
     client.delete_poster = AsyncMock()
+    client.post_now_playing = AsyncMock(
+        return_value={"ok": True, "state": "playing", "frames_signalled": 1}
+    )
+    client.create_now_playing_token = AsyncMock(return_value="minted-token")
     client.set_display = AsyncMock()
     client.send_command = AsyncMock()
     client.reboot = AsyncMock()

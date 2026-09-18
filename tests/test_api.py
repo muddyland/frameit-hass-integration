@@ -222,3 +222,138 @@ async def test_reboot(client):
 
     call_args = session.request.call_args
     assert "system/reboot" in call_args.args[1]
+
+
+# ---------------------------------------------------------------------------
+# Now playing — bearer-token webhook
+# ---------------------------------------------------------------------------
+
+
+def _form_fields(form) -> dict:
+    """Read back the field names and values staged on an aiohttp FormData."""
+    return {
+        opts["name"]: value
+        for opts, _headers, value in form._fields  # noqa: SLF001
+    }
+
+
+async def test_post_now_playing_sends_bearer_token(client):
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.post.return_value = make_response(
+            200, {"ok": True, "state": "playing", "frames_signalled": 2}
+        )
+        result = await client.post_now_playing("tok123", "playing")
+
+    assert result["frames_signalled"] == 2
+    call = session.post.call_args
+    assert call.args[0] == f"{MOCK_URL}/api/now-playing"
+    assert call.kwargs["headers"] == {"Authorization": "Bearer tok123"}
+
+
+async def test_post_now_playing_does_not_use_the_session_cookie_path(client):
+    """The webhook authenticates by token; a 401 must not trigger a re-login."""
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.request.reset_mock()
+        session.post.return_value = make_response(401, {"error": "bad token"})
+        with pytest.raises(FrameITAuthError):
+            await client.post_now_playing("wrong", "playing")
+
+    session.request.assert_not_called()
+
+
+async def test_post_now_playing_includes_metadata(client):
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.post.return_value = make_response(200, {"ok": True})
+        await client.post_now_playing(
+            "tok",
+            "playing",
+            title="Bohemian Rhapsody",
+            artist="Queen",
+            album="A Night at the Opera",
+            entity_id="media_player.atv",
+        )
+
+    fields = _form_fields(session.post.call_args.kwargs["data"])
+    assert fields["state"] == "playing"
+    assert fields["title"] == "Bohemian Rhapsody"
+    assert fields["artist"] == "Queen"
+    assert fields["album"] == "A Night at the Opera"
+    assert fields["entity_id"] == "media_player.atv"
+    assert "image" not in fields
+
+
+async def test_post_now_playing_omits_blank_metadata(client):
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.post.return_value = make_response(200, {"ok": True})
+        await client.post_now_playing("tok", "idle", title=None, artist="")
+
+    fields = _form_fields(session.post.call_args.kwargs["data"])
+    assert set(fields) == {"state"}
+
+
+@pytest.mark.parametrize(
+    ("magic", "expected_type"),
+    [
+        (b"\xff\xd8\xff\xe0" + b"0" * 16, "image/jpeg"),
+        (b"\x89PNG\r\n\x1a\n" + b"0" * 16, "image/png"),
+        (b"RIFF\x00\x00\x00\x00WEBP" + b"0" * 16, "image/webp"),
+    ],
+)
+async def test_post_now_playing_sniffs_image_type(client, magic, expected_type):
+    """The server sniffs magic bytes, so the declared type must match them."""
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.post.return_value = make_response(200, {"ok": True})
+        await client.post_now_playing("tok", "playing", image=magic)
+
+    form = session.post.call_args.kwargs["data"]
+    headers = [h for opts, h, _v in form._fields if opts["name"] == "image"][0]  # noqa: SLF001
+    assert headers["Content-Type"] == expected_type
+
+
+async def test_post_now_playing_raises_on_server_error(client):
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        bad = make_response(400)
+        bad.text = AsyncMock(return_value="not a valid image")
+        session.post.return_value = bad
+        with pytest.raises(FrameITConnectionError, match="400"):
+            await client.post_now_playing("tok", "playing", image=b"junk")
+
+
+async def test_post_now_playing_wraps_client_error(client):
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.post.side_effect = aiohttp.ClientError("down")
+        with pytest.raises(FrameITConnectionError):
+            await client.post_now_playing("tok", "playing")
+
+
+async def test_create_now_playing_token(client):
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.request.return_value = make_response(200, {"token": "abc123"})
+        token = await client.create_now_playing_token()
+
+    assert token == "abc123"
+    assert "now-playing-token" in session.request.call_args.args[1]
+
+
+async def test_create_now_playing_token_failure_returns_none(client):
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.request.return_value = make_response(500)
+        assert await client.create_now_playing_token() is None
