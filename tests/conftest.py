@@ -155,6 +155,194 @@ MOCK_TRAILERS = [
 
 
 # ---------------------------------------------------------------------------
+# Fake FrameIT server — models the server's CSRF rules
+#
+# The real server rejects any state-changing request whose endpoint is not
+# machine-to-machine unless it carries the session's CSRF token, and it
+# *clears the session* on a successful login, so the token that authorises
+# the login POST is dead by the time the first write goes out. Mocking the
+# aiohttp session with a plain AsyncMock hides both of those, which is how the
+# "auth has failed" regression got through: every login test passed against a
+# server that never checked anything.
+# ---------------------------------------------------------------------------
+
+LOGIN_PAGE = (
+    "<!DOCTYPE html><html><body>"
+    '<form method="post">'
+    '<input type="hidden" name="_csrf_token" value="{token}">'
+    '<input type="text" name="username">'
+    '<input type="password" name="password">'
+    "</form></body></html>"
+)
+
+ADMIN_PAGE = (
+    "<!DOCTYPE html><html><head>"
+    '<meta name="csrf-token" content="{token}">'
+    "</head><body>Dashboard</body></html>"
+)
+
+CSRF_ERROR_BODY = {
+    "error": "CSRF token missing or invalid. Reload the page and try again."
+}
+
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+
+class FakeResponse:
+    """The slice of aiohttp.ClientResponse that FrameITApiClient uses."""
+
+    def __init__(self, status: int, *, json_data=None, text: str = "") -> None:
+        self.status = status
+        self._json = json_data
+        self._text = text
+
+    async def json(self):
+        return self._json if self._json is not None else {}
+
+    async def text(self):
+        return self._text
+
+
+class FakeFrameITServer:
+    """A stand-in aiohttp.ClientSession backed by FrameIT's real auth rules.
+
+    Pass ``enforce_csrf=False`` to model a server from before the hardening
+    commit, and set ``reject_csrf=True`` to model a session whose token has
+    gone stale underneath the client.
+    """
+
+    def __init__(
+        self,
+        *,
+        username: str = MOCK_USERNAME,
+        password: str = MOCK_PASSWORD,
+        enforce_csrf: bool = True,
+        serve_login_token: bool = True,
+    ) -> None:
+        self.username = username
+        self.password = password
+        self.enforce_csrf = enforce_csrf
+        self.serve_login_token = serve_login_token
+        self.reject_csrf = False
+
+        self.closed = False
+        self.signed_in = False
+        self.csrf: str | None = None
+        self._minted = 0
+
+        # Call log: (method, path, csrf_token_sent)
+        self.calls: list[tuple[str, str, str | None]] = []
+        self.login_posts = 0
+        self.csrf_rejections = 0
+        # Canned JSON for non-auth paths: {(METHOD, path): (status, json)}
+        self.routes: dict[tuple[str, str], tuple[int, object]] = {
+            ("GET", "/api/frames"): (200, MOCK_FRAMES),
+        }
+
+    # -- helpers ---------------------------------------------------------
+
+    def _mint(self) -> str:
+        self._minted += 1
+        self.csrf = f"csrf-token-{self._minted}"
+        return self.csrf
+
+    @staticmethod
+    def _path(url: str) -> str:
+        return url[len(MOCK_URL):] if url.startswith(MOCK_URL) else url
+
+    @staticmethod
+    def _sent_token(data, headers) -> str | None:
+        if headers:
+            for key, value in headers.items():
+                if key.lower() == "x-csrf-token":
+                    return value
+        if isinstance(data, dict):
+            return data.get("_csrf_token")
+        return None
+
+    def _csrf_ok(self, sent: str | None) -> bool:
+        if not self.enforce_csrf:
+            return True
+        if self.reject_csrf or not self.csrf or not sent:
+            return False
+        return sent == self.csrf
+
+    def _csrf_refusal(self) -> FakeResponse:
+        self.csrf_rejections += 1
+        return FakeResponse(400, json_data=CSRF_ERROR_BODY, text=CSRF_ERROR_BODY["error"])
+
+    def _admin_page(self) -> FakeResponse:
+        return FakeResponse(200, text=ADMIN_PAGE.format(token=self._mint()))
+
+    # -- the aiohttp.ClientSession surface --------------------------------
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def get(self, url, **kwargs):
+        return await self.request("GET", url, **kwargs)
+
+    async def post(self, url, **kwargs):
+        return await self.request("POST", url, **kwargs)
+
+    async def request(self, method, url, **kwargs):  # noqa: C901
+        method = method.upper()
+        path = self._path(url)
+        data = kwargs.get("data")
+        sent = self._sent_token(data, kwargs.get("headers"))
+        self.calls.append((method, path, sent))
+
+        if path == "/admin/login":
+            return await self._handle_login(method, data, sent)
+
+        if path == "/admin":
+            if not self.signed_in:
+                return FakeResponse(302, text="")
+            return self._admin_page()
+
+        if not self.signed_in:
+            return FakeResponse(401, json_data={"error": "Unauthorized"})
+
+        if method not in SAFE_METHODS and not self._csrf_ok(sent):
+            return self._csrf_refusal()
+
+        status, body = self.routes.get((method, path), (200, {"ok": True}))
+        return FakeResponse(status, json_data=body)
+
+    async def _handle_login(self, method, data, sent):
+        if method == "GET":
+            if self.signed_in:
+                # The real server redirects an authenticated GET to /admin.
+                return self._admin_page()
+            token = self._mint() if self.serve_login_token else None
+            if token is None:
+                return FakeResponse(200, text="<html><body>no token here</body></html>")
+            return FakeResponse(200, text=LOGIN_PAGE.format(token=token))
+
+        self.login_posts += 1
+        if not self._csrf_ok(sent):
+            # Rejected by the before_request hook — the password is never
+            # even looked at, which is exactly what the bug report saw.
+            return self._csrf_refusal()
+
+        data = data or {}
+        if data.get("username") != self.username or data.get("password") != self.password:
+            return FakeResponse(200, text=LOGIN_PAGE.format(token=self._mint()))
+
+        # _sign_in() calls session.clear(), so the login token dies here.
+        self.signed_in = True
+        self.csrf = None
+        # allow_redirects=True lands us on the dashboard, which mints a new one.
+        return self._admin_page()
+
+
+@pytest.fixture
+def fake_server():
+    """A FakeFrameITServer enforcing CSRF exactly like the real one."""
+    return FakeFrameITServer()
+
+
+# ---------------------------------------------------------------------------
 # Shared fixture — a pre-configured mock FrameITApiClient
 # ---------------------------------------------------------------------------
 

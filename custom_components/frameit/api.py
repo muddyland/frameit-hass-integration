@@ -2,11 +2,52 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
+
+# FrameIT protects every state-changing endpoint that is not machine-to-machine
+# with a per-session CSRF token. A browser picks it up by rendering a page; we
+# have to scrape it out of the same HTML.
+#
+# Two places carry it: the login form's hidden field
+# (`<input name="_csrf_token" value="...">`) and, once signed in, the admin
+# layout's `<meta name="csrf-token" content="...">`. Both are needed, because
+# the server's _sign_in() clears the session — the token that authorises the
+# login POST is destroyed by the successful login itself.
+_CSRF_FIELD = "_csrf_token"
+_CSRF_HEADER = "X-CSRF-Token"
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+_CSRF_TAG_RE = re.compile(r"<(?:input|meta)\b[^>]*>", re.IGNORECASE)
+_CSRF_NAME_RE = re.compile(
+    r"""name\s*=\s*["'](?:_csrf_token|csrf-token)["']""", re.IGNORECASE
+)
+_CSRF_VALUE_RE = re.compile(
+    r"""(?:value|content)\s*=\s*["']([^"']*)["']""", re.IGNORECASE
+)
+
+
+def _extract_csrf_token(html: str | None) -> str | None:
+    """Pull the CSRF token out of a FrameIT HTML page, or None if absent.
+
+    Scans whole ``<input>``/``<meta>`` tags rather than matching a fixed
+    attribute order, so a template tweak that reorders attributes does not
+    silently break authentication.
+    """
+    if not html or not isinstance(html, str):
+        return None
+    for match in _CSRF_TAG_RE.finditer(html):
+        tag = match.group(0)
+        if not _CSRF_NAME_RE.search(tag):
+            continue
+        value = _CSRF_VALUE_RE.search(tag)
+        if value and value.group(1):
+            return value.group(1)
+    return None
 
 
 class FrameITAuthError(Exception):
@@ -76,6 +117,8 @@ class FrameITApiClient:
         self._username = username
         self._password = password
         self._session: aiohttp.ClientSession | None = None
+        # Minted by login(); replayed as X-CSRF-Token on every write.
+        self._csrf_token: str | None = None
 
     # ------------------------------------------------------------------
     # Session management
@@ -89,15 +132,54 @@ class FrameITApiClient:
         return self._session
 
     async def login(self) -> None:
-        """POST credentials to obtain a session cookie."""
+        """Sign in and obtain both a session cookie and a CSRF token.
+
+        Three steps, and all three are load-bearing:
+
+        1. GET /admin/login — the cookie jar picks up the session cookie and
+           the page body carries the CSRF token that POST must echo back.
+           Without this the POST is rejected with HTTP 400 before the
+           credential check ever runs.
+        2. POST the credentials plus the token, then verify against a
+           protected endpoint.
+        3. Re-read a CSRF token from the signed-in page. The server clears the
+           session on successful login, so the token from step 1 is dead and
+           subsequent writes need the new one.
+        """
         session = self._ensure_session()
+        self._csrf_token = None
+        login_url = f"{self._base_url}/admin/login"
+
         try:
-            await session.post(
-                f"{self._base_url}/admin/login",
-                data={"username": self._username, "password": self._password},
+            page = await session.get(
+                login_url,
                 allow_redirects=True,
                 timeout=aiohttp.ClientTimeout(total=10),
             )
+            login_html = await page.text()
+        except aiohttp.ClientError as exc:
+            raise FrameITConnectionError(str(exc)) from exc
+
+        token = _extract_csrf_token(login_html)
+        if not token:
+            raise FrameITConnectionError(
+                f"No CSRF token found on the FrameIT login page at {login_url}. "
+                "Check that the URL points at a FrameIT server and that it is "
+                "up to date."
+            )
+
+        try:
+            resp = await session.post(
+                login_url,
+                data={
+                    "username": self._username,
+                    "password": self._password,
+                    _CSRF_FIELD: token,
+                },
+                allow_redirects=True,
+                timeout=aiohttp.ClientTimeout(total=10),
+            )
+            landing_html = await resp.text()
             # Verify auth by hitting a protected endpoint
             resp = await session.get(
                 f"{self._base_url}/api/frames",
@@ -106,6 +188,30 @@ class FrameITApiClient:
             )
             if resp.status in (302, 401, 403):
                 raise FrameITAuthError("Invalid credentials or server rejected login")
+        except aiohttp.ClientError as exc:
+            raise FrameITConnectionError(str(exc)) from exc
+
+        # The login POST usually lands on the admin dashboard, which already
+        # embeds a fresh token; only fetch the page again if it did not.
+        self._csrf_token = _extract_csrf_token(landing_html)
+        if not self._csrf_token:
+            self._csrf_token = await self._fetch_csrf_token()
+        if not self._csrf_token:
+            _LOGGER.warning(
+                "Signed in to FrameIT but found no CSRF token on the admin "
+                "page; changes sent to the server may be rejected"
+            )
+
+    async def _fetch_csrf_token(self) -> str | None:
+        """GET the admin dashboard and scrape its CSRF meta tag."""
+        session = self._ensure_session()
+        try:
+            resp = await session.get(
+                f"{self._base_url}/admin",
+                allow_redirects=True,
+                timeout=aiohttp.ClientTimeout(total=10),
+            )
+            return _extract_csrf_token(await resp.text())
         except aiohttp.ClientError as exc:
             raise FrameITConnectionError(str(exc)) from exc
 
@@ -118,24 +224,70 @@ class FrameITApiClient:
     # Internal request helper
     # ------------------------------------------------------------------
 
+    @staticmethod
+    async def _is_csrf_rejection(resp: aiohttp.ClientResponse) -> bool:
+        """True if this 400 is the server refusing a missing/stale CSRF token.
+
+        A rejection is a 400, not a 401, so it does not trip the session-expiry
+        path above; without this check a stale token would fail every write
+        until Home Assistant restarted.
+        """
+        if resp.status != 400:
+            return False
+        try:
+            body = await resp.text()
+        except Exception:  # pylint: disable=broad-except
+            return False
+        return isinstance(body, str) and "csrf" in body.lower()
+
+    async def _send(
+        self,
+        method: str,
+        url: str,
+        timeout: aiohttp.ClientTimeout,
+        kwargs: dict[str, Any],
+    ) -> aiohttp.ClientResponse:
+        """One attempt, with the CSRF token attached if the method needs it."""
+        session = self._ensure_session()
+        call_kwargs = dict(kwargs)
+        if method.upper() not in _SAFE_METHODS and self._csrf_token:
+            headers = dict(call_kwargs.get("headers") or {})
+            headers.setdefault(_CSRF_HEADER, self._csrf_token)
+            call_kwargs["headers"] = headers
+        return await session.request(
+            method, url, allow_redirects=False, timeout=timeout, **call_kwargs
+        )
+
     async def _request(
         self, method: str, path: str, **kwargs: Any
     ) -> aiohttp.ClientResponse:
-        """Make an authenticated request, re-logging in if the session expired."""
-        session = self._ensure_session()
+        """Make an authenticated request, re-logging in if the session expired.
+
+        Writes carry a CSRF token: every state-changing FrameIT endpoint this
+        client touches (PATCH /api/frames/<id>, PATCH /api/settings, POST
+        /api/settings/now-playing-token, the agent proxy, DELETE /api/posters/
+        <id>) is CSRF-protected. Only the frame/agent machine-to-machine
+        endpoints are exempt, and this client does not call those.
+        """
         url = f"{self._base_url}{path}"
         timeout = kwargs.pop("timeout", aiohttp.ClientTimeout(total=10))
+        unsafe = method.upper() not in _SAFE_METHODS
+
+        if unsafe and self._csrf_token is None:
+            # Nothing to sign the write with yet — log in first rather than
+            # spending a guaranteed 400 to find that out.
+            await self.login()
 
         try:
-            resp = await session.request(
-                method, url, allow_redirects=False, timeout=timeout, **kwargs
-            )
+            resp = await self._send(method, url, timeout, kwargs)
             if resp.status in (302, 401, 403):
                 _LOGGER.debug("Session expired, re-authenticating")
                 await self.login()
-                resp = await session.request(
-                    method, url, allow_redirects=False, timeout=timeout, **kwargs
-                )
+                resp = await self._send(method, url, timeout, kwargs)
+            elif unsafe and await self._is_csrf_rejection(resp):
+                _LOGGER.debug("CSRF token rejected, re-authenticating")
+                await self.login()
+                resp = await self._send(method, url, timeout, kwargs)
             return resp
         except aiohttp.ClientError as exc:
             raise FrameITConnectionError(str(exc)) from exc
