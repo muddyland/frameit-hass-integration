@@ -5,6 +5,7 @@ import asyncio
 import logging
 from datetime import timedelta
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -17,11 +18,17 @@ _LOGGER = logging.getLogger(__name__)
 class FrameITCoordinator(DataUpdateCoordinator):
     """Polls the FrameIT server for all frame and agent data."""
 
-    def __init__(self, hass: HomeAssistant, client: FrameITApiClient) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        client: FrameITApiClient,
+    ) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
+            config_entry=entry,
             update_interval=timedelta(seconds=UPDATE_INTERVAL),
         )
         self.client = client

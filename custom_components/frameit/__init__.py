@@ -61,7 +61,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await client.close()
         return False
 
-    coordinator = FrameITCoordinator(hass, client)
+    coordinator = FrameITCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
 
     await _async_cleanup_legacy_posters(hass, entry, coordinator)

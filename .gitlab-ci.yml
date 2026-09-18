@@ -5,7 +5,7 @@ stages:
 # ── Shared Python setup ────────────────────────────────────────────────────
 
 .python_base:
-  image: python:3.12-slim
+  image: python:3.14-slim
   tags:
     - saas-linux-small-amd64
   before_script:
@@ -17,7 +17,7 @@ lint:
   extends: .python_base
   stage: lint
   script:
-    - pip install --quiet pylint
+    - pip install --quiet pylint==4.0.8
     - echo "==> Linting integration..."
     - pylint custom_components/frameit/ --rcfile=.pylintrc
   allow_failure: false

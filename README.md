@@ -104,6 +104,12 @@ this properly, so:
 Copy `custom_components/frameit/` into your
 `<config>/custom_components/` directory, then restart Home Assistant.
 
+## Running the tests
+
+The test suite runs on **Python 3.14 or newer** — `requirements_test.txt` pins
+`pytest-homeassistant-custom-component`, which requires it and pulls in the
+matching Home Assistant release. Install it, then run `pytest tests/`.
+
 ## Configuration
 
 1. **Settings → Devices & Services → Add Integration → FrameIT**
