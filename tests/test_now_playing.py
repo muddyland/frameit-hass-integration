@@ -19,7 +19,11 @@ from custom_components.frameit.const import (
     DOMAIN,
     NOW_PLAYING_STATES,
 )
-from custom_components.frameit.now_playing import NowPlayingReporter, _map_state
+from custom_components.frameit.now_playing import (
+    NowPlayingReporter,
+    _describe,
+    _map_state,
+)
 from tests.conftest import (
     MOCK_FRAMES,
     MOCK_PASSWORD,
@@ -140,6 +144,170 @@ def test_map_state_only_emits_states_the_server_accepts(ha_state):
 
 
 # ---------------------------------------------------------------------------
+# Banner text: what a film, an episode and a track each put on the two lines
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("case", "attrs", "expected"),
+    [
+        (
+            "film with an app name",
+            {
+                "media_title": "Blade Runner 2049",
+                "media_content_type": "movie",
+                "app_name": "Plex",
+            },
+            {"title": "Blade Runner 2049", "artist": "Plex", "album": None},
+        ),
+        (
+            "film with no app name leaves the bottom line blank",
+            {"media_title": "Blade Runner 2049", "media_content_type": "movie"},
+            {"title": "Blade Runner 2049", "artist": None, "album": None},
+        ),
+        (
+            "film reported as generic video",
+            {
+                "media_title": "Blade Runner 2049",
+                "media_content_type": "video",
+                "app_name": "Jellyfin",
+            },
+            {"title": "Blade Runner 2049", "artist": "Jellyfin", "album": None},
+        ),
+        (
+            "episode shows the series, never the episode title",
+            {
+                "media_title": "Ozymandias",
+                "media_series_title": "Breaking Bad",
+                "media_season": 5,
+                "media_episode": 14,
+                "media_content_type": "episode",
+                "app_name": "Plex",
+            },
+            {"title": "Breaking Bad", "artist": "Plex", "album": None},
+        ),
+        (
+            "episode with a series title but no app name",
+            {
+                "media_title": "Ozymandias",
+                "media_series_title": "Breaking Bad",
+                "media_content_type": "tvshow",
+            },
+            {"title": "Breaking Bad", "artist": None, "album": None},
+        ),
+        (
+            "tvshow content type with no series title falls back to the title",
+            {"media_title": "Episode 3", "media_content_type": "tvshow"},
+            {"title": "Episode 3", "artist": None, "album": None},
+        ),
+        (
+            "series title alone is enough, whatever the content type says",
+            {
+                "media_title": "Ozymandias",
+                "media_series_title": "Breaking Bad",
+                "media_content_type": "video",
+                "app_name": "Netflix",
+            },
+            {"title": "Breaking Bad", "artist": "Netflix", "album": None},
+        ),
+        (
+            "music is mapped exactly as it always was",
+            {
+                "media_title": "Bohemian Rhapsody",
+                "media_artist": "Queen",
+                "media_album_name": "A Night at the Opera",
+                "media_content_type": "music",
+            },
+            {
+                "title": "Bohemian Rhapsody",
+                "artist": "Queen",
+                "album": "A Night at the Opera",
+            },
+        ),
+        (
+            "music without a content type is still music",
+            {
+                "media_title": "Bohemian Rhapsody",
+                "media_artist": "Queen",
+                "media_album_name": "A Night at the Opera",
+            },
+            {
+                "title": "Bohemian Rhapsody",
+                "artist": "Queen",
+                "album": "A Night at the Opera",
+            },
+        ),
+        (
+            "unknown content type gives the title and nothing else",
+            {"media_title": "Some Stream", "media_content_type": "channel"},
+            {"title": "Some Stream", "artist": None, "album": None},
+        ),
+        (
+            "no attributes at all",
+            {},
+            {"title": None, "artist": None, "album": None},
+        ),
+        (
+            "blank strings are not banner text",
+            {
+                "media_title": "The Bear",
+                "media_series_title": "   ",
+                "media_content_type": "tvshow",
+                "app_name": "",
+            },
+            {"title": "The Bear", "artist": None, "album": None},
+        ),
+        (
+            "content type casing does not matter",
+            {
+                "media_title": "Arrival",
+                "media_content_type": "Movie",
+                "app_name": "Kodi",
+            },
+            {"title": "Arrival", "artist": "Kodi", "album": None},
+        ),
+    ],
+)
+def test_describe(case, attrs, expected):
+    assert _describe(attrs) == expected, case
+
+
+def test_describe_does_not_invent_series_info_for_an_app_only_episode():
+    """The Apple TV case: an episode arrives as bare title + "video".
+
+    There is genuinely no series name in the state, so the only honest thing
+    to put on the wall is the title the player gave us. Reconstructing a
+    series name out of it would be a guess.
+    """
+    described = _describe(
+        {
+            "media_title": "Stranger Things: Chapter One",
+            "media_content_type": "video",
+            "app_name": "Netflix",
+        }
+    )
+    assert described == {
+        "title": "Stranger Things: Chapter One",
+        "artist": "Netflix",
+        "album": None,
+    }
+
+
+def test_describe_prefers_series_over_a_stray_artist():
+    """Some video players put a channel or director in media_artist."""
+    described = _describe(
+        {
+            "media_title": "Ozymandias",
+            "media_series_title": "Breaking Bad",
+            "media_artist": "Rian Johnson",
+            "app_name": "Plex",
+        }
+    )
+    assert described["title"] == "Breaking Bad"
+    assert described["artist"] == "Plex"
+
+
+# ---------------------------------------------------------------------------
 # Reporting and dedup
 # ---------------------------------------------------------------------------
 
@@ -208,6 +376,116 @@ async def test_track_change_reposts(hass: HomeAssistant, reporter):
     second = reporter._coordinator.client.post_now_playing.await_args_list[1]
     assert second.args[1] == "playing"
     assert second.kwargs["title"] == "Under Pressure"
+
+
+def _watching(hass, **overrides):
+    """A television episode playing, in the shape Plex or Kodi reports one."""
+    attrs = {
+        "entity_picture": "https://example.com/s05e14.jpg",
+        "media_title": "Ozymandias",
+        "media_series_title": "Breaking Bad",
+        "media_season": 5,
+        "media_episode": 14,
+        "media_content_type": "episode",
+        "media_content_id": "episode-514",
+        "app_name": "Plex",
+    }
+    attrs.update(overrides)
+    hass.states.async_set(SOURCE, "playing", attrs)
+
+
+async def test_report_posts_series_name_and_app_for_an_episode(
+    hass: HomeAssistant, reporter
+):
+    _watching(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+
+    reporter._coordinator.client.post_now_playing.assert_awaited_once_with(
+        TOKEN,
+        "playing",
+        title="Breaking Bad",
+        artist="Plex",
+        album=None,
+        entity_id=SOURCE,
+        image=b"art",
+    )
+
+
+async def test_report_posts_title_and_app_for_a_film(hass: HomeAssistant, reporter):
+    hass.states.async_set(
+        SOURCE,
+        "playing",
+        {
+            "entity_picture": "https://example.com/poster.jpg",
+            "media_title": "Blade Runner 2049",
+            "media_content_type": "movie",
+            "media_content_id": "movie-1",
+            "app_name": "Jellyfin",
+        },
+    )
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+
+    call = reporter._coordinator.client.post_now_playing.await_args
+    assert call.kwargs["title"] == "Blade Runner 2049"
+    assert call.kwargs["artist"] == "Jellyfin"
+    assert call.kwargs["album"] is None
+
+
+async def test_next_episode_of_the_same_series_reposts(hass: HomeAssistant, reporter):
+    """Same series, same app: identical banners, but a different episode.
+
+    The banner text is deliberately the same for both, so keying dedup off it
+    would leave the previous episode's still on the wall for the whole of the
+    next one.
+    """
+    _watching(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art1")):
+        await reporter.async_report()
+        _watching(
+            hass,
+            media_title="Granite State",
+            media_episode=15,
+            media_content_id="episode-515",
+            entity_picture="https://example.com/s05e15.jpg",
+        )
+        await reporter.async_report()
+
+    assert reporter._coordinator.client.post_now_playing.await_count == 2
+    second = reporter._coordinator.client.post_now_playing.await_args_list[1]
+    assert second.kwargs["title"] == "Breaking Bad"
+    assert second.kwargs["image"] == b"art1"
+
+
+async def test_switching_app_reposts(hass: HomeAssistant, reporter):
+    """app_name is on the bottom banner, so a change to it has to be sent."""
+    _watching(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+        _watching(hass, app_name="Netflix")
+        await reporter.async_report()
+
+    assert reporter._coordinator.client.post_now_playing.await_count == 2
+    assert (
+        reporter._coordinator.client.post_now_playing.await_args.kwargs["artist"]
+        == "Netflix"
+    )
+
+
+async def test_video_position_tick_still_does_not_repost(
+    hass: HomeAssistant, reporter
+):
+    """The extra video attributes must not make the fingerprint noisy."""
+    _watching(hass, media_position=10)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+
+    for position in (11, 12, 13):
+        _watching(hass, media_position=position, media_position_updated_at="now")
+        await reporter.async_report()
+
+    assert reporter._coordinator.client.post_now_playing.await_count == 1
 
 
 async def test_pause_reposts_without_refetching_art(hass: HomeAssistant, reporter):

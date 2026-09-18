@@ -289,6 +289,11 @@ class FrameITApiClient:
     ) -> dict:
         """POST the current media state to the now-playing webhook.
 
+        ``title``/``artist``/``album`` are the server's field names and mean
+        "top banner" and "bottom banner" rather than anything musical — for a
+        film or a television series they carry the title and the app it is
+        streaming from. See :func:`now_playing._describe`.
+
         This endpoint authenticates with a bearer token rather than the admin
         session, so it deliberately bypasses ``_request``: a 401 here means a
         wrong token, and re-running the cookie login would neither fix it nor

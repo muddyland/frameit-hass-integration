@@ -25,6 +25,16 @@ NOW_PLAYING_STATES = ("playing", "paused", "idle", "off")
 # through to the frame's normal rotation.
 NOW_PLAYING_ACTIVE_STATES = ("playing", "paused")
 
+# media_content_type values, as documented for media_player, grouped by how
+# the now-playing banners should read. Streaming apps are inconsistent about
+# which they report — an episode played through Netflix on an Apple TV often
+# arrives as plain "video" with no series fields at all — so the presence of
+# media_series_title always wins over the content type, and a missing series
+# title is never guessed at.
+NOW_PLAYING_TV_CONTENT_TYPES = ("tvshow", "episode")
+NOW_PLAYING_VIDEO_CONTENT_TYPES = ("movie", "video")
+NOW_PLAYING_MUSIC_CONTENT_TYPE = "music"
+
 # Mirrors the server default for now_playing_stale_seconds. Used only until
 # the coordinator has read the real value out of /api/settings.
 NOW_PLAYING_DEFAULT_STALE_SECONDS = 120
