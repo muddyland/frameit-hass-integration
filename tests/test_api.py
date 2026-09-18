@@ -14,13 +14,22 @@ from custom_components.frameit.api import (
     FrameITApiClient,
     FrameITAuthError,
     FrameITConnectionError,
+    _extract_csrf_token,
 )
 from tests.conftest import (
+    ADMIN_PAGE,
+    LOGIN_PAGE,
     MOCK_DISPLAY_ON,
     MOCK_FRAMES,
+    MOCK_PASSWORD,
     MOCK_SYSTEM_INFO,
     MOCK_URL,
+    MOCK_USERNAME,
+    FakeFrameITServer,
 )
+
+# Token baked into the stubbed pages that make_session() serves.
+STUB_CSRF = "stub-csrf-token"
 
 
 # ---------------------------------------------------------------------------
@@ -28,20 +37,31 @@ from tests.conftest import (
 # ---------------------------------------------------------------------------
 
 
-def make_response(status: int = 200, json_data=None) -> AsyncMock:
+def make_response(status: int = 200, json_data=None, text: str = "") -> AsyncMock:
     resp = AsyncMock()
     resp.status = status
     resp.json = AsyncMock(return_value=json_data if json_data is not None else {})
+    resp.text = AsyncMock(return_value=text)
     return resp
 
 
 def make_session(**overrides) -> MagicMock:
-    """Build a mock aiohttp.ClientSession with sensible defaults."""
+    """Build a mock aiohttp.ClientSession with sensible defaults.
+
+    Every GET serves a page carrying a CSRF token, because login() needs one
+    from the login form and another from the signed-in dashboard.
+    """
     session = MagicMock()
     session.closed = False
     session.close = AsyncMock()
-    session.post = AsyncMock(return_value=make_response(302))
-    session.get = AsyncMock(return_value=make_response(200, MOCK_FRAMES))
+    session.post = AsyncMock(
+        return_value=make_response(302, text=ADMIN_PAGE.format(token=STUB_CSRF))
+    )
+    session.get = AsyncMock(
+        return_value=make_response(
+            200, MOCK_FRAMES, text=LOGIN_PAGE.format(token=STUB_CSRF)
+        )
+    )
     session.request = AsyncMock(return_value=make_response(200, MOCK_FRAMES))
     for key, value in overrides.items():
         setattr(session, key, value)
@@ -70,7 +90,14 @@ async def test_login_success(client):
 async def test_login_invalid_credentials(client):
     """Verification GET returns 302 → treat as bad credentials."""
     session = make_session(
-        get=AsyncMock(return_value=make_response(302)),
+        get=AsyncMock(
+            side_effect=[
+                # The login page still renders and still carries a token...
+                make_response(200, text=LOGIN_PAGE.format(token=STUB_CSRF)),
+                # ...but the protected endpoint bounces us.
+                make_response(302),
+            ]
+        ),
     )
     with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
         with pytest.raises(FrameITAuthError):
@@ -357,3 +384,211 @@ async def test_create_now_playing_token_failure_returns_none(client):
         await client.login()
         session.request.return_value = make_response(500)
         assert await client.create_now_playing_token() is None
+
+
+# ---------------------------------------------------------------------------
+# CSRF — against a fake server that enforces the real rules
+#
+# Regression cover for the "auth has failed" report: FrameIT started rejecting
+# every state-changing request without a CSRF token, and the client sent none,
+# so login and every write failed regardless of the password.
+# ---------------------------------------------------------------------------
+
+
+async def test_fake_server_rejects_a_login_post_with_no_csrf_token(fake_server):
+    """Guard on the guard: the fake must actually enforce what it claims to."""
+    resp = await fake_server.post(
+        f"{MOCK_URL}/admin/login",
+        data={"username": MOCK_USERNAME, "password": MOCK_PASSWORD},
+    )
+    assert resp.status == 400
+    assert "CSRF" in (await resp.text())
+    assert fake_server.signed_in is False
+
+
+async def test_login_gets_the_login_page_then_posts_the_token(client, fake_server):
+    """The whole bug in one test: no prior GET means no token means no login."""
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=fake_server
+    ):
+        await client.login()
+
+    assert fake_server.signed_in is True
+    assert fake_server.csrf_rejections == 0
+    # A GET of the login page must come first...
+    assert fake_server.calls[0][:2] == ("GET", "/admin/login")
+    # ...and the credential POST must echo the token that GET handed out.
+    login_post = next(
+        call for call in fake_server.calls if call[:2] == ("POST", "/admin/login")
+    )
+    assert login_post[2] == "csrf-token-1"
+
+
+async def test_login_raises_auth_error_when_the_token_is_rejected(client, fake_server):
+    """A stale/forged token 400s before the password is ever checked."""
+    fake_server.reject_csrf = True
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=fake_server
+    ):
+        with pytest.raises(FrameITAuthError):
+            await client.login()
+
+    assert fake_server.signed_in is False
+    assert fake_server.csrf_rejections >= 1
+
+
+async def test_login_raises_connection_error_when_the_page_has_no_token(client):
+    """No hidden field: say so clearly instead of posting a None token."""
+    server = FakeFrameITServer(serve_login_token=False)
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=server
+    ):
+        with pytest.raises(FrameITConnectionError, match="No CSRF token"):
+            await client.login()
+
+    assert server.login_posts == 0
+
+
+async def test_login_survives_wrong_password_as_an_auth_error(client):
+    """Correct token, wrong password — still an auth error, not a 400."""
+    server = FakeFrameITServer(password="something-else")
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=server
+    ):
+        with pytest.raises(FrameITAuthError):
+            await client.login()
+
+    assert server.csrf_rejections == 0
+
+
+async def test_login_picks_up_a_fresh_token_after_sign_in(client, fake_server):
+    """The server clears the session on login, so the login token is dead."""
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=fake_server
+    ):
+        await client.login()
+
+    assert client._csrf_token == fake_server.csrf
+    assert client._csrf_token != "csrf-token-1"
+
+
+async def test_writes_carry_the_csrf_token(client, fake_server):
+    """PATCH /api/frames/<id> is CSRF-protected too — not just login."""
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=fake_server
+    ):
+        await client.login()
+        await client.update_frame(1, {"rotation": 90})
+
+    patch_call = next(
+        call for call in fake_server.calls if call[:2] == ("PATCH", "/api/frames/1")
+    )
+    assert patch_call[2] == client._csrf_token
+    assert fake_server.csrf_rejections == 0
+
+
+async def test_create_now_playing_token_carries_the_csrf_token(client, fake_server):
+    """Minting a webhook token is a POST to a non-exempt endpoint."""
+    fake_server.routes[("POST", "/api/settings/now-playing-token")] = (
+        200,
+        {"token": "minted"},
+    )
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=fake_server
+    ):
+        await client.login()
+        token = await client.create_now_playing_token()
+
+    assert token == "minted"
+    assert fake_server.csrf_rejections == 0
+
+
+async def test_settings_patch_carries_the_csrf_token(client, fake_server):
+    fake_server.routes[("PATCH", "/api/settings")] = (200, {"pool_order": "random"})
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=fake_server
+    ):
+        await client.login()
+        await client.update_settings({"pool_order": "random"})
+
+    assert fake_server.csrf_rejections == 0
+
+
+async def test_safe_requests_send_no_csrf_token(client, fake_server):
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=fake_server
+    ):
+        await client.login()
+        await client.get_frames()
+
+    get_call = next(
+        call for call in fake_server.calls if call[:2] == ("GET", "/api/frames")
+    )
+    assert get_call[2] is None
+
+
+async def test_a_write_before_login_logs_in_first(client, fake_server):
+    """No token in hand yet: log in rather than burn a guaranteed 400."""
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=fake_server
+    ):
+        await client.send_command(1, "next")
+
+    assert fake_server.signed_in is True
+    assert fake_server.csrf_rejections == 0
+    assert fake_server.calls[0][:2] == ("GET", "/admin/login")
+
+
+async def test_a_stale_csrf_token_is_refreshed_and_the_write_retried(
+    client, fake_server
+):
+    """A 400 is not a 401, so CSRF staleness needs its own recovery path."""
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=fake_server
+    ):
+        await client.login()
+        # The server rotates its token underneath us (a restart, another tab).
+        fake_server.csrf = "rotated-token"
+        resp = await client._request("POST", "/api/frames/1/command", json={"c": "n"})
+
+    assert resp.status == 200
+    assert fake_server.csrf_rejections == 1
+    assert fake_server.login_posts == 2
+
+
+async def test_client_still_works_against_a_server_without_csrf(client):
+    """Older FrameIT: no enforcement, and the client must not care."""
+    server = FakeFrameITServer(enforce_csrf=False)
+    with patch(
+        "custom_components.frameit.api.aiohttp.ClientSession", return_value=server
+    ):
+        await client.login()
+        frames = await client.get_frames()
+
+    assert len(frames) == 2
+
+
+# ---------------------------------------------------------------------------
+# _extract_csrf_token()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        ('<input type="hidden" name="_csrf_token" value="abc">', "abc"),
+        ('<meta name="csrf-token" content="def">', "def"),
+        # Attribute order must not matter.
+        ('<input value="ghi" name="_csrf_token" type="hidden">', "ghi"),
+        # Single quotes, as some templating setups emit.
+        ("<meta name='csrf-token' content='jkl'>", "jkl"),
+        # Unrelated fields must not be mistaken for the token.
+        ('<input name="username" value="admin">', None),
+        ("<html><body>no token here</body></html>", None),
+        ('<input name="_csrf_token" value="">', None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_extract_csrf_token(html, expected):
+    assert _extract_csrf_token(html) == expected
