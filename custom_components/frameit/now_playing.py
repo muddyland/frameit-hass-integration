@@ -40,6 +40,12 @@ between two situations that used to look identical on the wire:
 :meth:`NowPlayingReporter._item_changed` is what separates the two: it compares
 the fingerprint with the play state dropped, so a pause or a heartbeat is
 recognisably the same thing playing.
+
+Clearing the artwork also forgets ``_last_picture``, because that field tracks
+what the *server* is holding. If it kept pointing at the cover the server has
+just dropped, the same item returning after an art-less gap (a film, YouTube,
+then the same film) would look unchanged to the download shortcut and the frame
+would stay stuck on the placeholder.
 """
 from __future__ import annotations
 
@@ -358,8 +364,9 @@ class NowPlayingReporter:
             if picture != self._last_picture:
                 image = await self._download(picture)
                 if image is None:
-                    # Leave _last_picture alone so the next attempt retries the
-                    # download rather than assuming the server has the art.
+                    # _last_picture is never advanced to this URL below, so the
+                    # next attempt retries the download rather than assuming
+                    # the server has the art.
                     _LOGGER.debug("Reporting now-playing without artwork for %s", source)
         elif active and not picture:
             self._log_missing_artwork(source, described["title"])
@@ -394,8 +401,20 @@ class NowPlayingReporter:
         self._last_state = mapped
         if image is not None:
             self._last_picture = picture
-        elif not active:
+        elif clear_artwork or not active:
+            # _last_picture means "the URL whose bytes the server is holding",
+            # so it has to be forgotten the moment the server stops holding
+            # them — whether that is because nothing is playing, or because we
+            # just told it to drop the art for an item that has none.
+            #
+            # Forgetting it on a clear is what lets the *same* item come back
+            # after an art-less gap (Plex film -> YouTube -> the same film
+            # again). Its entity_picture is unchanged, so without this reset
+            # the `picture != self._last_picture` shortcut above would skip the
+            # download and the upload, and the frame would stay on the
+            # placeholder until the picture URL changed or playback stopped.
             self._last_picture = None
+        if not active:
             # Nothing is on the wall, so the next thing to play is worth a
             # fresh line in the log even if it is the same title as before.
             self._logged_no_artwork.clear()

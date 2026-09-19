@@ -711,6 +711,67 @@ async def test_failed_download_retry_on_the_same_item_does_not_re_signal(
     assert _clear_flags(reporter) == [True, False]
 
 
+async def test_same_item_after_an_artless_gap_re_uploads_its_art(
+    hass: HomeAssistant, reporter
+):
+    """The reviewer's reproduction: art -> art-less -> the *same* art item.
+
+    Plex film on the Apple TV, switch to YouTube, then resume the film. The
+    middle item cleared the server's copy of the cover, so coming back to the
+    identical entity_picture must download and upload it again instead of being
+    skipped by the unchanged-picture shortcut — otherwise the frame keeps the
+    placeholder for an item that genuinely has art.
+    """
+    download = AsyncMock(return_value=b"art")
+    with patch.object(reporter, "_download", download):
+        _playing(hass)
+        await reporter.async_report()
+
+        _artless(hass)
+        await reporter.async_report()
+
+        # The very same item, with the very same entity_picture, comes back.
+        _playing(hass)
+        await reporter.async_report()
+
+    assert _clear_flags(reporter) == [False, True, False]
+    assert download.await_count == 2
+    assert download.await_args.args[0] == "https://example.com/cover.jpg"
+
+    calls = reporter._coordinator.client.post_now_playing.await_args_list
+    assert [call.kwargs["image"] for call in calls] == [b"art", None, b"art"]
+    assert reporter._last_picture == "https://example.com/cover.jpg"
+
+
+async def test_artless_gap_does_not_make_heartbeats_re_upload(
+    hass: HomeAssistant, reporter
+):
+    """Recovering from the gap must not turn into a re-upload every beat.
+
+    Once the item is back on the wall the server holds its bytes again, so the
+    heartbeats that follow take the quiet path exactly as they did before the
+    gap: no download, no image, no clear.
+    """
+    download = AsyncMock(return_value=b"art")
+    with patch.object(reporter, "_download", download):
+        _playing(hass)
+        await reporter.async_report()
+        _artless(hass)
+        await reporter.async_report()
+        _playing(hass)
+        await reporter.async_report()
+        for _ in range(3):
+            await reporter.async_report(force=True)
+
+    assert download.await_count == 2
+    assert _clear_flags(reporter) == [False, True, False, False, False, False]
+    images = [
+        call.kwargs["image"]
+        for call in reporter._coordinator.client.post_now_playing.await_args_list
+    ]
+    assert images == [b"art", None, b"art", None, None, None]
+
+
 async def test_artwork_arriving_later_is_sent_without_the_signal(
     hass: HomeAssistant, reporter
 ):
