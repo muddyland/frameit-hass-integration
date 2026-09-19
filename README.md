@@ -28,25 +28,53 @@ the following entities:
 ## Now playing
 
 The integration can mirror what a media player is playing onto your frames:
-Home Assistant posts the state, the artwork and two lines of caption to the
-FrameIT server, and the server shows it on every frame whose **Now Playing**
-switch is on. One source player feeds all of them.
+Home Assistant posts the state, the title and the artwork to the FrameIT
+server, and the server shows it on every frame whose **Now Playing** switch is
+on. One source player feeds all of them.
 
 Films and television are the main case; music works too.
 
-| Playing | Top banner | Bottom banner |
-|---------|------------|---------------|
-| A television episode | The **series** name | The app it is streaming from |
-| A film | The film title | The app it is streaming from |
-| A track | The track title | The artist, or the album |
-| Anything else | Whatever title the player reports | *(blank)* |
+| Playing | Shown on the frame |
+|---------|--------------------|
+| A television episode | The **series** name |
+| A film | The film title |
+| A track | The track title |
+| Anything else | Whatever title the player reports |
 
 Episode numbers are deliberately left off: a frame showing *Breaking Bad*
 right through a run of episodes reads better than one that changes to
-*S05E14* every forty minutes. The bottom banner is blank when the player does
-not report an `app_name`, which is common for local libraries.
+*S05E14* every forty minutes.
 
-Which line you get depends on what your player actually publishes, and players
+The frame's bottom banner is a fixed **Now Playing** label. It used to show
+the source app, but not every integration publishes one — Home Assistant's
+Plex `media_player` has no `app_name` attribute at all — so on those sources
+the banner was simply blank. The app name is still sent to the server and
+stored; it just no longer decides what the frame reads.
+
+### When there is no artwork
+
+Not every player publishes a cover. YouTube through an Apple TV is the clearest
+case: Home Assistant's `apple_tv` integration publishes no `entity_picture` for
+it, because pyatv has none to offer. That is an upstream limitation, not
+something this integration can work around.
+
+What it does instead is tell the server explicitly that this item has no art,
+so the server drops whatever it was holding and the frame draws a placeholder
+under the title. Without that signal the *previous* item's cover stayed on the
+wall behind the new title, which read as the wrong thing playing.
+
+The signal is only ever sent when the item itself changes. Heartbeats and
+pause/resume reposts of something already on the wall deliberately say nothing
+about the artwork, so a cover that is still valid never blinks off.
+
+Two log lines are worth knowing about, both at default log levels:
+
+- **Info**, once per title: a player is publishing no artwork at all and the
+  frame will show a placeholder.
+- **Warning**, once per URL: an artwork download came back with a non-200
+  status. A repeatedly failing URL is logged once, not once per heartbeat.
+
+Which title you get depends on what your player actually publishes, and players
 vary a lot. A series name is used whenever `media_series_title` is set. Some
 streaming apps — Netflix through an Apple TV, for instance — publish only a
 plain title with no series fields at all; that title is then shown as-is
@@ -68,8 +96,8 @@ Two details worth knowing:
 
 - Nothing is re-sent for a position tick — only an actual state or metadata
   change posts, so playing something does not hammer the server. A new episode
-  of the same series does count as a change, even though the banners read the
-  same, because the artwork behind them is different.
+  of the same series does count as a change, even though the banner reads the
+  same, because the artwork behind it is different.
 - While something is playing the integration re-posts on a heartbeat at half
   the server's `now_playing_stale_seconds` (120 s by default, so every 60 s).
   The server treats art older than that window as cleared, which is what makes

@@ -83,14 +83,23 @@ def _now_playing_form(
     album: str | None,
     entity_id: str | None,
     image: bytes | None,
+    clear_artwork: bool = False,
 ) -> aiohttp.FormData:
     """Build the multipart body for /api/now-playing.
 
     Empty metadata fields are omitted rather than sent blank, so the server
     stores None and a frame falls back to its own defaults.
+
+    ``clear_artwork`` sends ``artwork=none``, which tells the server this
+    update genuinely has no cover and the stored one should go. Omitting the
+    field means "nothing to say about the artwork" — the server then leaves
+    what it holds alone, which is what keeps a heartbeat from clearing art
+    that is still valid.
     """
     form = aiohttp.FormData()
     form.add_field("state", state)
+    if clear_artwork and not image:
+        form.add_field("artwork", "none")
     for name, value in (
         ("title", title),
         ("artist", artist),
@@ -438,13 +447,19 @@ class FrameITApiClient:
         album: str | None = None,
         entity_id: str | None = None,
         image: bytes | None = None,
+        clear_artwork: bool = False,
     ) -> dict:
         """POST the current media state to the now-playing webhook.
 
-        ``title``/``artist``/``album`` are the server's field names and mean
-        "top banner" and "bottom banner" rather than anything musical — for a
-        film or a television series they carry the title and the app it is
-        streaming from. See :func:`now_playing._describe`.
+        ``title``/``artist``/``album`` are the server's field names. ``title``
+        is what a frame shows in its top banner; the other two are stored but
+        no longer drive any banner text, because the bottom banner is now a
+        static "Now Playing" label. See :func:`now_playing._describe`.
+
+        Pass ``clear_artwork=True`` only when this update genuinely has no
+        cover *and* the item has changed — it erases whatever art the server
+        holds. An ordinary update with no ``image`` says nothing about the
+        artwork and leaves it in place.
 
         This endpoint authenticates with a bearer token rather than the admin
         session, so it deliberately bypasses ``_request``: a 401 here means a
@@ -459,6 +474,7 @@ class FrameITApiClient:
             album=album,
             entity_id=entity_id,
             image=image,
+            clear_artwork=clear_artwork,
         )
 
         try:
