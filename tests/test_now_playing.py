@@ -1,6 +1,7 @@
 """Tests for now-playing reporting — reporter, per-frame switch, options flow."""
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -325,6 +326,7 @@ async def test_report_posts_state_and_metadata(hass: HomeAssistant, reporter):
         album="A Night at the Opera",
         entity_id=SOURCE,
         image=b"\xff\xd8\xffart",
+        clear_artwork=False,
     )
 
 
@@ -409,6 +411,7 @@ async def test_report_posts_series_name_and_app_for_an_episode(
         album=None,
         entity_id=SOURCE,
         image=b"art",
+        clear_artwork=False,
     )
 
 
@@ -459,7 +462,7 @@ async def test_next_episode_of_the_same_series_reposts(hass: HomeAssistant, repo
 
 
 async def test_switching_app_reposts(hass: HomeAssistant, reporter):
-    """app_name is on the bottom banner, so a change to it has to be sent."""
+    """app_name is stored server-side and fingerprinted, so it has to be sent."""
     _watching(hass)
     with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
         await reporter.async_report()
@@ -537,6 +540,246 @@ async def test_failed_download_retries_on_next_report(hass: HomeAssistant, repor
         await reporter.async_report(force=True)
 
     assert download.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# The no-artwork signal
+#
+# Two things are being protected here, and they pull in opposite directions:
+# a new item with no cover must clear the previous item's cover, and a repost
+# of an item that is already on the wall must never clear anything.
+# ---------------------------------------------------------------------------
+
+
+def _artless(hass, **overrides):
+    """A YouTube-on-Apple-TV shaped state: a title and no entity_picture."""
+    attrs = {
+        "media_title": "Some YouTube Video",
+        "media_content_type": "video",
+        "media_content_id": "yt-1",
+        "app_name": "YouTube",
+    }
+    attrs.update(overrides)
+    hass.states.async_set(SOURCE, "playing", attrs)
+
+
+def _clear_flags(reporter) -> list[bool]:
+    return [
+        call.kwargs["clear_artwork"]
+        for call in reporter._coordinator.client.post_now_playing.await_args_list
+    ]
+
+
+async def test_new_item_without_a_picture_signals_no_artwork(
+    hass: HomeAssistant, reporter
+):
+    """The Apple TV/YouTube case: no entity_picture at all is published."""
+    _artless(hass)
+    await reporter.async_report()
+
+    call = reporter._coordinator.client.post_now_playing.await_args
+    assert call.kwargs["image"] is None
+    assert call.kwargs["clear_artwork"] is True
+    assert call.kwargs["title"] == "Some YouTube Video"
+
+
+async def test_switching_to_an_artless_item_clears_the_previous_art(
+    hass: HomeAssistant, reporter
+):
+    """The reported bug: the old cover used to stay up under the new title."""
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+    _artless(hass)
+    await reporter.async_report()
+
+    assert _clear_flags(reporter) == [False, True]
+
+
+async def test_heartbeat_does_not_clear_artwork_for_an_unchanged_item(
+    hass: HomeAssistant, reporter
+):
+    """The regression this feature must never introduce.
+
+    A track with a cover is re-posted by the heartbeat every few minutes with
+    no image, because the server already holds the bytes. If those reposts
+    carried the no-artwork signal the cover would blink off, come back on the
+    next real change, and blink off again — once per heartbeat, forever.
+    """
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+        for _ in range(4):
+            await reporter.async_report(force=True)
+
+    flags = _clear_flags(reporter)
+    assert len(flags) == 5
+    assert flags == [False, False, False, False, False]
+
+
+async def test_heartbeat_does_not_re_signal_for_an_unchanged_artless_item(
+    hass: HomeAssistant, reporter
+):
+    """The same guard for the art-less case.
+
+    The first post clears the stale cover. Every heartbeat after it is the same
+    item, so it must say nothing about the artwork rather than re-clearing —
+    the server would be doing needless work, and any art that arrived in the
+    meantime would be thrown away.
+    """
+    _artless(hass)
+    await reporter.async_report()
+    for _ in range(4):
+        await reporter.async_report(force=True)
+
+    assert _clear_flags(reporter) == [True, False, False, False, False]
+
+
+async def test_pause_repost_does_not_clear_artwork(hass: HomeAssistant, reporter):
+    """A pause is the same item in a new state, not a new item."""
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+        hass.states.async_set(
+            SOURCE, "paused", dict(hass.states.get(SOURCE).attributes)
+        )
+        await reporter.async_report()
+        hass.states.async_set(
+            SOURCE, "playing", dict(hass.states.get(SOURCE).attributes)
+        )
+        await reporter.async_report()
+
+    assert _clear_flags(reporter) == [False, False, False]
+
+
+async def test_pause_of_an_artless_item_does_not_re_signal(
+    hass: HomeAssistant, reporter
+):
+    _artless(hass)
+    await reporter.async_report()
+    hass.states.async_set(SOURCE, "paused", dict(hass.states.get(SOURCE).attributes))
+    await reporter.async_report()
+
+    assert _clear_flags(reporter) == [True, False]
+
+
+async def test_position_ticks_never_signal_no_artwork(hass: HomeAssistant, reporter):
+    """Dedup already suppresses these, but belt and braces: no clears either."""
+    _artless(hass, media_position=10)
+    await reporter.async_report()
+    for position in (11, 12, 13):
+        _artless(hass, media_position=position, media_position_updated_at="now")
+        await reporter.async_report()
+
+    assert _clear_flags(reporter) == [True]
+
+
+async def test_stopping_does_not_signal_no_artwork(hass: HomeAssistant, reporter):
+    """An inactive state is not a frame override, so there is nothing to clear."""
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+    hass.states.async_set(SOURCE, "off", {})
+    await reporter.async_report()
+
+    assert _clear_flags(reporter) == [False, False]
+
+
+async def test_failed_download_on_a_new_item_signals_no_artwork(
+    hass: HomeAssistant, reporter
+):
+    """A cover we could not fetch is, to the frame, no cover at all."""
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+    _playing(hass, media_title="Under Pressure", media_content_id="track-2",
+             entity_picture="https://example.com/broken.jpg")
+    with patch.object(reporter, "_download", AsyncMock(return_value=None)):
+        await reporter.async_report()
+
+    assert _clear_flags(reporter) == [False, True]
+
+
+async def test_failed_download_retry_on_the_same_item_does_not_re_signal(
+    hass: HomeAssistant, reporter
+):
+    _playing(hass)
+    with patch.object(reporter, "_download", AsyncMock(return_value=None)):
+        await reporter.async_report()
+        await reporter.async_report(force=True)
+
+    assert _clear_flags(reporter) == [True, False]
+
+
+async def test_artwork_arriving_later_is_sent_without_the_signal(
+    hass: HomeAssistant, reporter
+):
+    """A player that publishes its cover a beat late must recover cleanly."""
+    _artless(hass)
+    await reporter.async_report()
+    _artless(hass, entity_picture="https://example.com/late.jpg")
+    with patch.object(reporter, "_download", AsyncMock(return_value=b"art")):
+        await reporter.async_report()
+
+    assert _clear_flags(reporter) == [True, False]
+    assert (
+        reporter._coordinator.client.post_now_playing.await_args.kwargs["image"]
+        == b"art"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Logging — both of these were debug-only, which is what made the bug invisible
+# ---------------------------------------------------------------------------
+
+
+async def test_missing_artwork_is_logged_at_info_once_per_title(
+    hass: HomeAssistant, reporter, caplog
+):
+    caplog.set_level(logging.INFO, logger="custom_components.frameit.now_playing")
+    _artless(hass)
+    await reporter.async_report()
+    for _ in range(3):
+        await reporter.async_report(force=True)
+
+    records = [
+        r for r in caplog.records
+        if r.levelno == logging.INFO and "publishes no artwork" in r.message
+    ]
+    assert len(records) == 1
+    assert "Some YouTube Video" in records[0].getMessage()
+
+
+async def test_missing_artwork_is_logged_again_for_a_different_title(
+    hass: HomeAssistant, reporter, caplog
+):
+    caplog.set_level(logging.INFO, logger="custom_components.frameit.now_playing")
+    _artless(hass)
+    await reporter.async_report()
+    _artless(hass, media_title="Another Video", media_content_id="yt-2")
+    await reporter.async_report()
+
+    records = [r for r in caplog.records if "publishes no artwork" in r.message]
+    assert len(records) == 2
+
+
+async def test_download_http_error_warns_once_per_url(
+    hass: HomeAssistant, reporter, caplog
+):
+    caplog.set_level(logging.DEBUG, logger="custom_components.frameit.now_playing")
+    patcher, _session = _patch_session(_FakeResponse(404))
+    with patcher:
+        for _ in range(3):
+            assert await reporter._download("https://example.com/missing.jpg") is None
+        assert await reporter._download("https://example.com/other.jpg") is None
+
+    warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "returned HTTP 404" in r.message
+    ]
+    assert len(warnings) == 2
+    assert "missing.jpg" in warnings[0].getMessage()
+    assert "other.jpg" in warnings[1].getMessage()
 
 
 async def test_connection_error_is_swallowed_and_retried(hass: HomeAssistant, reporter):

@@ -326,6 +326,43 @@ async def test_post_now_playing_omits_blank_metadata(client):
     assert set(fields) == {"state"}
 
 
+async def test_post_now_playing_sends_the_explicit_no_artwork_signal(client):
+    """clear_artwork=True is the only thing that erases art on the server."""
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.post.return_value = make_response(200, {"ok": True})
+        await client.post_now_playing("tok", "playing", title="A Video",
+                                      clear_artwork=True)
+
+    fields = _form_fields(session.post.call_args.kwargs["data"])
+    assert fields["artwork"] == "none"
+
+
+async def test_post_now_playing_omits_the_signal_by_default(client):
+    """No artwork field at all means "leave whatever you have alone"."""
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.post.return_value = make_response(200, {"ok": True})
+        await client.post_now_playing("tok", "playing", title="A Video")
+
+    assert "artwork" not in _form_fields(session.post.call_args.kwargs["data"])
+
+
+async def test_post_now_playing_never_clears_when_it_is_also_sending_art(client):
+    """Contradictory arguments must not risk discarding real bytes."""
+    session = make_session()
+    with patch("custom_components.frameit.api.aiohttp.ClientSession", return_value=session):
+        await client.login()
+        session.post.return_value = make_response(200, {"ok": True})
+        await client.post_now_playing("tok", "playing",
+                                      image=b"\xff\xd8\xff\xe0" + b"0" * 16,
+                                      clear_artwork=True)
+
+    assert "artwork" not in _form_fields(session.post.call_args.kwargs["data"])
+
+
 @pytest.mark.parametrize(
     ("magic", "expected_type"),
     [

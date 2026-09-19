@@ -8,10 +8,13 @@ POSTs to ``/api/now-playing``.
 Three things make that more than a state listener:
 
 * The server stores three text fields, named ``title``/``artist``/``album``
-  after the music case it was first built for, and a frame renders the first
-  on the top banner and the other two on the bottom. Films and television are
-  the common case here, so :func:`_describe` decides what belongs on those two
-  lines for video as well as for music.
+  after the music case it was first built for. A frame renders ``title`` in
+  its top banner; the bottom banner is a static "Now Playing" label and no
+  longer reflects any of them. (It used to show the source app, which was
+  simply blank on integrations that publish no ``app_name`` — HA's Plex
+  media_player among them.) ``artist`` and ``album`` are still sent because
+  the server stores them, so :func:`_describe` still fills them sensibly for
+  video as well as for music.
 
 * A player emits a state_changed event on every position tick. Re-posting on
   each of those would hammer the server and rewrite the album art file several
@@ -21,6 +24,22 @@ Three things make that more than a state listener:
   no fresh POST. A track longer than that window would fall off the wall
   mid-play if we only posted on change, so an active state is also re-posted
   on a heartbeat comfortably inside the window.
+
+Artwork is not guaranteed. Plenty of sources publish none — YouTube on an
+Apple TV is the confirmed case, where the upstream integration genuinely has
+no image to offer — so this module has to tell the server the difference
+between two situations that used to look identical on the wire:
+
+* **A new item that has no cover.** Sent as ``clear_artwork``, so the server
+  drops whatever it is holding. Without this the *previous* item's cover sits
+  behind the new title, which reads as the wrong thing playing.
+* **The same item, reported again** by a heartbeat or a pause. These carry no
+  image because the server already has it, and must never clear anything —
+  otherwise the art blinks off once every heartbeat interval.
+
+:meth:`NowPlayingReporter._item_changed` is what separates the two: it compares
+the fingerprint with the play state dropped, so a pause or a heartbeat is
+recognisably the same thing playing.
 """
 from __future__ import annotations
 
@@ -81,17 +100,18 @@ def _text(value: Any) -> str | None:
 def _describe(attrs: Mapping[str, Any]) -> dict[str, str | None]:
     """Map media_player attributes onto the three text fields the server stores.
 
-    The server keeps ``title``, ``artist`` and ``album`` and a frame renders
-    ``title`` in the top banner and ``artist or album`` in the bottom one. The
-    names are historical — they are really just "top line" and "bottom line" —
-    so video content reuses them rather than needing new server fields:
+    The server keeps ``title``, ``artist`` and ``album``. A frame renders
+    ``title`` in the top banner; the other two are stored but no longer drive
+    any banner, since the bottom one is now a static "Now Playing" label. The
+    names are historical, so video content reuses them rather than needing new
+    server fields:
 
-    * **TV** — a series title, or a content type that says episode. The top
-      line is the *series name*, deliberately without a season or episode
-      number, so consecutive episodes read as one continuous thing on the
-      wall. The bottom line is the app the show is coming from.
-    * **Film** — a movie or video content type with no series title. Title on
-      top, app name underneath.
+    * **TV** — a series title, or a content type that says episode. The title
+      is the *series name*, deliberately without a season or episode number,
+      so consecutive episodes read as one continuous thing on the wall.
+      ``artist`` carries the app the show is coming from.
+    * **Film** — a movie or video content type with no series title. The film
+      title, with the app in ``artist``.
     * **Music** — unchanged from the original music-only mapping: track,
       artist, album.
     * **Anything else** — the title on its own. Nothing is inferred.
@@ -148,6 +168,11 @@ class NowPlayingReporter:
         self._last_picture: str | None = None
         self._heartbeat_seconds: int | None = None
         self._auth_failed = False
+        # Log-once bookkeeping. These exist because both conditions used to be
+        # debug-only, which made a real artwork failure invisible to anyone
+        # running at default log levels — the bug that started this.
+        self._warned_download_urls: set[str] = set()
+        self._logged_no_artwork: set[str] = set()
 
     # ------------------------------------------------------------------
     # Configuration
@@ -296,6 +321,18 @@ class NowPlayingReporter:
             attrs.get("entity_picture"),
         )
 
+    def _item_changed(self, fingerprint: tuple) -> bool:
+        """Whether this is a different *item* from the one last reported.
+
+        The fingerprint minus its first element, which is the mapped play
+        state. Dropping that is the whole point: a pause, a resume or a
+        heartbeat is the same item in a new state, and must not be mistaken
+        for new content whose artwork needs clearing.
+        """
+        if self._last_fingerprint is None:
+            return True
+        return fingerprint[1:] != self._last_fingerprint[1:]
+
     async def async_report(self, force: bool = False) -> None:
         """Post the source player's current state, unless nothing has changed."""
         if not self.configured or self._auth_failed:
@@ -310,9 +347,12 @@ class NowPlayingReporter:
         mapped = fingerprint[0]
         attrs = state.attributes if state else {}
         picture = attrs.get("entity_picture")
+        item_changed = self._item_changed(fingerprint)
+        active = mapped in NOW_PLAYING_ACTIVE_STATES
+        described = _describe(attrs)
 
         image: bytes | None = None
-        if mapped in NOW_PLAYING_ACTIVE_STATES and picture:
+        if active and picture:
             # Only fetch the artwork when it is genuinely new. A heartbeat or a
             # pause/resume on the same track re-uses what the server already has.
             if picture != self._last_picture:
@@ -321,8 +361,13 @@ class NowPlayingReporter:
                     # Leave _last_picture alone so the next attempt retries the
                     # download rather than assuming the server has the art.
                     _LOGGER.debug("Reporting now-playing without artwork for %s", source)
+        elif active and not picture:
+            self._log_missing_artwork(source, described["title"])
 
-        described = _describe(attrs)
+        # Only a *new* item with no usable art may clear what the server holds.
+        # A heartbeat or a pause repost of the same item takes the quiet path,
+        # or the cover would blink off once per heartbeat interval.
+        clear_artwork = active and image is None and item_changed
 
         try:
             await self._coordinator.client.post_now_playing(
@@ -333,6 +378,7 @@ class NowPlayingReporter:
                 album=described["album"],
                 entity_id=source,
                 image=image,
+                clear_artwork=clear_artwork,
             )
         except FrameITAuthError as exc:
             # A bad token will not fix itself; stop hammering the endpoint and
@@ -348,12 +394,39 @@ class NowPlayingReporter:
         self._last_state = mapped
         if image is not None:
             self._last_picture = picture
-        elif mapped not in NOW_PLAYING_ACTIVE_STATES:
+        elif not active:
             self._last_picture = None
+            # Nothing is on the wall, so the next thing to play is worth a
+            # fresh line in the log even if it is the same title as before.
+            self._logged_no_artwork.clear()
 
     # ------------------------------------------------------------------
     # Artwork
     # ------------------------------------------------------------------
+
+    def _log_missing_artwork(self, source: str, title: str | None) -> None:
+        """Note, once per title, that a player is publishing no artwork at all.
+
+        Info rather than debug: this is the normal, permanent behaviour of some
+        sources (HA's apple_tv integration publishes no ``entity_picture`` for
+        YouTube, because pyatv has none to give), and someone looking at a
+        frame showing a placeholder should be able to find out why without
+        turning on debug logging for the whole component.
+        """
+        key = title or source
+        if key in self._logged_no_artwork:
+            return
+        # Bounded: a long session of art-less items should not grow this set
+        # without limit. Forgetting just means one more log line later.
+        if len(self._logged_no_artwork) >= 64:
+            self._logged_no_artwork.clear()
+        self._logged_no_artwork.add(key)
+        _LOGGER.info(
+            "%s is playing %s but publishes no artwork; the frame will show a "
+            "placeholder instead",
+            source,
+            title or "an untitled item",
+        )
 
     async def _download(self, entity_picture: str) -> bytes | None:
         """Fetch image bytes; resolves relative HA proxy URLs to an absolute URL."""
@@ -368,7 +441,21 @@ class NowPlayingReporter:
             ) as resp:
                 if resp.status == 200:
                     return await resp.read()
-                _LOGGER.debug("Image download returned HTTP %s for %s", resp.status, url)
+                # Once per URL: a heartbeat retries the same failing URL every
+                # few minutes, and a warning repeated forever is noise. The
+                # first one is the useful one.
+                if url not in self._warned_download_urls:
+                    self._warned_download_urls.add(url)
+                    _LOGGER.warning(
+                        "Now-playing artwork download returned HTTP %s for %s; "
+                        "the frame will show a placeholder instead",
+                        resp.status,
+                        url,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Image download returned HTTP %s for %s", resp.status, url
+                    )
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.warning("Could not download now-playing artwork: %s", exc)
         return None
